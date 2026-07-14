@@ -64,7 +64,7 @@ defaults), then automatically:
 Alternatively, skip editing the files by passing the repo on the command line:
 
 ```bash
-GITHUB_REPO=youruser/ascom-ping-monitor bash -c "$(wget -qLO - https://raw.githubusercontent.com/youruser/ascom-ping-monitor/main/proxmox-lxc.sh)"
+GITHUB_REPO=youruser/ascom-ping-monitor bash -c "$(wget -qLO - https://raw.githubusercontent.com/thommgoodwill-png/ascom-ping-monitor/main/proxmox-lxc.sh)"
 ```
 
 ## Install option 2 — inside an existing container
@@ -72,7 +72,7 @@ GITHUB_REPO=youruser/ascom-ping-monitor bash -c "$(wget -qLO - https://raw.githu
 Already have a Debian/Ubuntu LXC? Run this **inside the container**:
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/YOUR-GITHUB-USERNAME/ascom-ping-monitor/main/install.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/thommgoodwill-png/ascom-ping-monitor/main/install.sh)"
 ```
 
 `install.sh` detects it's running standalone and downloads the rest of the repo
