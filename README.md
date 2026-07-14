@@ -64,7 +64,7 @@ defaults), then automatically:
 Alternatively, skip editing the files by passing the repo on the command line:
 
 ```bash
-GITHUB_REPO=youruser/ascom-ping-monitor bash -c "$(wget -qLO - https://raw.githubusercontent.com/thommgoodwill-png/ascom-ping-monitor/main/proxmox-lxc.sh)"
+GITHUB_REPO=thommgoodwill-png/ascom-ping-monitor bash -c "$(wget -qLO - https://raw.githubusercontent.com/thommgoodwill-png/ascom-ping-monitor/main/proxmox-lxc.sh)"
 ```
 
 ## Install option 2 — inside an existing container
