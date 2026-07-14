@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="filter-row">
+  <div class="range-group" id="range-group">
+    <button class="range-btn" data-sec="900">15 m</button>
+    <button class="range-btn active" data-sec="3600">1 h</button>
+    <button class="range-btn" data-sec="10800">3 h</button>
+    <button class="range-btn" data-sec="21600">6 h</button>
+    <button class="range-btn" data-sec="43200">12 h</button>
+    <button class="range-btn" data-sec="86400">24 h</button>
+    <button class="range-btn" data-sec="172800">2 d</button>
+    <button class="range-btn" data-sec="604800">7 d</button>
+    <button class="range-btn" data-sec="2592000">30 d</button>
+  </div>
+  <span class="filter-note" id="refresh-note"></span>
+</div>
+
+<div class="card">
+  <h2>All devices</h2>
+  <p class="card-sub">Average latency per device · <span style="color:var(--warn-text)">▲ warning &gt; <span class="warn-val"></span> ms</span> · <span style="color:var(--crit-text)">■ critical &gt; <span class="crit-val"></span> ms</span> · ▼ red triangles mark failed pings</p>
+  <div class="legend" id="overview-legend"></div>
+  <div id="overview-chart"></div>
+</div>
+
+<div class="grid" id="device-grid"></div>
+<div class="card" id="no-devices" style="display:none;">
+  <h2>No devices yet</h2>
+  <p class="card-sub">Add your first device on the <a href="/devices">Devices</a> page.</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  let rangeSec = 3600;
+  let overview = null;
+  const miniCharts = new Map();
+  let refreshTimer = null;
+  let refreshSeconds = 30;
+
+  function pillFor(d) {
+    if (!d.enabled) return ["disabled", "○ Disabled"];
+    if (d.state === "down") return ["down", "✖ Down"];
+    if (d.in_loss) return ["warn", "▲ Packet loss"];
+    if (d.state === "up") {
+      if (d.last_latency != null && d.last_latency > d.eff_crit) return ["crit", "■ Up · slow"];
+      if (d.last_latency != null && d.last_latency > d.eff_warn) return ["warn", "▲ Up · warn"];
+      return ["up", "● Up"];
+    }
+    return ["unknown", "… Waiting"];
+  }
+
+  function stat(label, valueHtml) {
+    return '<div class="stat"><div class="label">' + label + '</div>' +
+           '<div class="value small">' + valueHtml + '</div></div>';
+  }
+
+  function ms(v, warn, crit) {
+    if (v == null) return '<span class="muted">—</span>';
+    return '<span class="' + latClass(v, warn, crit) + '">' + v.toFixed(1) +
+           '<span class="unit"> ms</span></span>';
+  }
+
+  async function loadDevices() {
+    const data = await api("/api/devices");
+    window._warn = data.warn_ms; window._crit = data.crit_ms;
+    document.querySelectorAll(".warn-val").forEach(e => e.textContent = data.warn_ms);
+    document.querySelectorAll(".crit-val").forEach(e => e.textContent = data.crit_ms);
+    const st = document.getElementById("mon-state");
+    const stT = document.getElementById("mon-state-text");
+    if (st) {
+      st.classList.toggle("off", !data.monitoring_enabled);
+      stT.textContent = data.monitoring_enabled ? "Monitoring" : "Paused";
+    }
+    const grid = document.getElementById("device-grid");
+    document.getElementById("no-devices").style.display =
+      data.devices.length ? "none" : "block";
+
+    for (const d of data.devices) {
+      let card = document.getElementById("dev-" + d.id);
+      if (!card) {
+        card = document.createElement("div");
+        card.className = "card";
+        card.id = "dev-" + d.id;
+        card.innerHTML =
+          '<div class="dev-head"><span class="pill unknown"></span>' +
+          '<span class="name"></span><span class="host"></span></div>' +
+          '<div class="stats"></div><div class="mini-chart"></div>';
+        grid.appendChild(card);
+      }
+      const [cls, label] = pillFor(d);
+      const pill = card.querySelector(".pill");
+      pill.className = "pill " + cls;
+      pill.textContent = label;
+      card.querySelector(".name").textContent = d.name;
+      card.querySelector(".host").textContent = d.host + (d.mac ? " · " + d.mac : "");
+      card.querySelector(".stats").innerHTML =
+        stat("Last ping", ms(d.last_latency, d.eff_warn, d.eff_crit)) +
+        stat("1 h avg", ms(d.hour_avg, d.eff_warn, d.eff_crit)) +
+        stat("1 h max", ms(d.hour_max, d.eff_warn, d.eff_crit)) +
+        stat("1 h jitter", d.hour_jitter == null ? '<span class="muted">—</span>' :
+          '<span class="' + (d.hour_jitter > data.jitter_warn ? "v-warn" : "v-good") + '">' +
+          d.hour_jitter.toFixed(1) + '<span class="unit"> ms</span></span>') +
+        stat("1 h loss", d.hour_loss == null ? '<span class="muted">—</span>' :
+          '<span class="' + (d.hour_loss > 0 ? "v-crit" : "v-good") + '">' +
+          d.hour_loss.toFixed(1) + '<span class="unit"> %</span></span>') +
+        stat("Checked", '<span class="muted">' + fmtAgo(d.last_ts) + "</span>");
+    }
+    // remove cards for deleted devices
+    const ids = new Set(data.devices.map(d => "dev-" + d.id));
+    for (const el of Array.from(grid.children)) {
+      if (!ids.has(el.id)) { el.remove(); }
+    }
+    return data;
+  }
+
+  async function loadHistory() {
+    const h = await api("/api/history?seconds=" + rangeSec);
+    const devs = h.devices;
+    // overview: one series per device, categorical colors in fixed device order
+    const series = devs.map((d, i) => ({
+      name: d.name, colorIndex: i,
+      data: h.series[String(d.id)] || [],
+    }));
+    const opts = {
+      series, start: h.start, end: h.end, bucket: h.bucket,
+      warn: h.warn_ms, crit: h.crit_ms, height: 260,
+      thresholdColoring: devs.length === 1,
+    };
+    if (!overview) {
+      overview = new LatencyChart(document.getElementById("overview-chart"), opts);
+    } else overview.update(opts);
+
+    // legend (only when ≥ 2 series)
+    const leg = document.getElementById("overview-legend");
+    leg.innerHTML = "";
+    if (devs.length >= 2) {
+      devs.forEach((d, i) => {
+        const item = document.createElement("span");
+        item.className = "item";
+        const key = document.createElement("span");
+        key.className = "key";
+        key.style.borderTopColor = chartSeriesColor(i);
+        item.appendChild(key);
+        const nm = document.createElement("span");
+        nm.textContent = d.name;
+        item.appendChild(nm);
+        leg.appendChild(item);
+      });
+    }
+
+    // per-device mini charts with threshold coloring
+    for (const [i, d] of devs.entries()) {
+      const card = document.getElementById("dev-" + d.id);
+      if (!card) continue;
+      const box = card.querySelector(".mini-chart");
+      const sOpts = {
+        series: [{ name: d.name, colorIndex: i, data: h.series[String(d.id)] || [] }],
+        start: h.start, end: h.end, bucket: h.bucket,
+        warn: d.eff_warn, crit: d.eff_crit, height: 150,
+        thresholdColoring: true,
+      };
+      if (!miniCharts.has(d.id)) miniCharts.set(d.id, new LatencyChart(box, sOpts));
+      else miniCharts.get(d.id).update(sOpts);
+    }
+    for (const [id, ch] of miniCharts) {
+      if (!devs.find(d => d.id === id)) { ch.destroy(); miniCharts.delete(id); }
+    }
+  }
+
+  async function refresh() {
+    try {
+      await loadDevices();
+      await loadHistory();
+      document.getElementById("refresh-note").textContent =
+        refreshSeconds > 0 ? "auto-refresh " + refreshSeconds + "s" : "auto-refresh off";
+    } catch (e) {
+      if (e.message !== "auth") toast("Refresh failed: " + e.message, true);
+    }
+  }
+
+  document.getElementById("range-group").addEventListener("click", ev => {
+    const btn = ev.target.closest(".range-btn");
+    if (!btn) return;
+    document.querySelectorAll(".range-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    rangeSec = parseInt(btn.dataset.sec, 10);
+    loadHistory().catch(e => toast(e.message, true));
+  });
+
+  api("/api/settings").then(s => {
+    refreshSeconds = s.settings.refresh_seconds;
+    schedule();
+  }).catch(() => schedule());
+
+  function schedule() {
+    clearInterval(refreshTimer);
+    if (refreshSeconds > 0) refreshTimer = setInterval(refresh, refreshSeconds * 1000);
+  }
+  refresh();
+})();
+</script>
+{% endblock %}

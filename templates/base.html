@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Ascom Ping Monitor{% endblock %}</title>
+<link rel="icon" href="{{ favicon_url }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script>
+  // apply saved theme before first paint to avoid flash
+  (function () {
+    var t = localStorage.getItem("pingmon-theme") || "{{ theme }}";
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">
+    <img src="{{ logo_url }}" alt="ascom">
+    <span class="sub">PING MONITOR</span>
+  </a>
+  <nav class="nav">
+    <a href="/" class="{{ 'active' if page == 'dashboard' }}">Dashboard</a>
+    <a href="/devices" class="{{ 'active' if page == 'devices' }}">Devices</a>
+    <a href="/events" class="{{ 'active' if page == 'events' }}">Events</a>
+    <a href="/heatmap" class="{{ 'active' if page == 'heatmap' }}">Heatmap</a>
+    <a href="/sla" class="{{ 'active' if page == 'sla' }}">SLA</a>
+    <a href="/settings" class="{{ 'active' if page == 'settings' }}">Settings</a>
+  </nav>
+  <span class="spacer"></span>
+  <div class="top-actions">
+    <span class="mon-state" id="mon-state" title="Monitoring status">
+      <span class="dot"></span><span id="mon-state-text">…</span>
+    </span>
+    <a class="icon-btn" href="/wallboard" title="Wallboard mode (full-screen status)">▦</a>
+    <button class="icon-btn" id="theme-btn" title="Toggle light / dark mode">☾</button>
+    <a class="btn small" href="/logout">Log out</a>
+  </div>
+</header>
+<main class="wrap">
+  {% block content %}{% endblock %}
+</main>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script src="{{ url_for('static', filename='js/charts.js') }}"></script>
+<script>initTheme("{{ theme }}");</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

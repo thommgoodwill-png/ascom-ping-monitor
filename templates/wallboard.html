@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wallboard — Ascom Ping Monitor</title>
+<link rel="icon" href="{{ favicon_url }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script>
+  (function () {
+    var t = localStorage.getItem("pingmon-theme") || "{{ theme }}";
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+<style>
+  body { padding: 18px; }
+  .wb-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 16px; }
+  .wb-head img { height: 24px; }
+  .wb-head .t { font-size: 15px; color: var(--muted); }
+  .wb-head .clock { margin-left: auto; font-size: 22px; font-weight: 600;
+                    font-variant-numeric: tabular-nums; }
+  .wb-grid { display: grid; gap: 14px;
+             grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+  .tile { border-radius: 12px; padding: 16px 18px; border: 2px solid var(--border);
+          background: var(--surface); }
+  .tile .nm { font-weight: 700; font-size: 16px; }
+  .tile .hs { font-size: 11.5px; color: var(--muted); margin-bottom: 8px; }
+  .tile .lat { font-size: 40px; font-weight: 700; line-height: 1.1; }
+  .tile .lat .u { font-size: 15px; font-weight: 400; color: var(--muted); }
+  .tile .st { margin-top: 8px; }
+  .tile.s-up   { border-color: var(--good); }
+  .tile.s-warn { border-color: var(--warn); background:
+                 linear-gradient(var(--warn-wash), var(--warn-wash)), var(--surface); }
+  .tile.s-crit, .tile.s-down { border-color: var(--crit); background:
+                 linear-gradient(var(--crit-wash), var(--crit-wash)), var(--surface); }
+  .wb-foot { margin-top: 16px; font-size: 12px; color: var(--muted); }
+  .wb-foot a { color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="wb-head">
+  <img src="{{ logo_url }}" alt="ascom">
+  <span class="t">NETWORK WALLBOARD</span>
+  <span class="mon-state" id="wb-maint" style="display:none;color:var(--warn-text);">🔧 maintenance window — alerts muted</span>
+  <span class="clock" id="wb-clock"></span>
+</div>
+<div class="wb-grid" id="wb-grid"></div>
+<div class="wb-foot">
+  Auto-refresh every {{ refresh }}s · press F11 for full screen ·
+  <a href="/">back to dashboard</a>
+</div>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script>
+(function () {
+  "use strict";
+  function tick() {
+    document.getElementById("wb-clock").textContent =
+      new Date().toLocaleTimeString();
+  }
+  setInterval(tick, 1000); tick();
+
+  function stateOf(d) {
+    if (!d.enabled) return ["", "○ Disabled", "unknown"];
+    if (d.state === "down") return ["s-down", "✖ DOWN", "down"];
+    if (d.in_loss) return ["s-warn", "▲ PACKET LOSS", "warn"];
+    if (d.state === "up") {
+      if (d.last_latency != null && d.last_latency > d.eff_crit) return ["s-crit", "■ SLOW", "crit"];
+      if (d.last_latency != null && d.last_latency > d.eff_warn) return ["s-warn", "▲ WARN", "warn"];
+      return ["s-up", "● UP", "up"];
+    }
+    return ["", "… waiting", "unknown"];
+  }
+
+  async function refresh() {
+    try {
+      const data = await api("/api/devices");
+      document.getElementById("wb-maint").style.display =
+        data.in_maintenance ? "inline" : "none";
+      const grid = document.getElementById("wb-grid");
+      grid.innerHTML = "";
+      for (const d of data.devices) {
+        const [cls, label, pillCls] = stateOf(d);
+        const tile = document.createElement("div");
+        tile.className = "tile " + cls;
+        const nm = document.createElement("div");
+        nm.className = "nm"; nm.textContent = d.name;
+        const hs = document.createElement("div");
+        hs.className = "hs";
+        hs.textContent = d.host + (d.mac ? " · " + d.mac : "");
+        const lat = document.createElement("div");
+        lat.className = "lat";
+        if (d.state === "down") {
+          lat.textContent = "DOWN";
+          lat.style.color = "var(--crit-text)";
+        } else if (d.last_latency != null) {
+          lat.innerHTML = "";
+          lat.appendChild(document.createTextNode(d.last_latency.toFixed(1)));
+          const u = document.createElement("span");
+          u.className = "u"; u.textContent = " ms";
+          lat.appendChild(u);
+          lat.style.color = d.last_latency > d.eff_crit ? "var(--crit-text)"
+            : d.last_latency > d.eff_warn ? "var(--warn-text)" : "var(--ink)";
+        } else {
+          lat.textContent = "—";
+        }
+        const st = document.createElement("div");
+        st.className = "st";
+        const pill = document.createElement("span");
+        pill.className = "pill " + pillCls;
+        pill.textContent = label;
+        st.appendChild(pill);
+        if (d.hour_loss != null && d.hour_loss > 0) {
+          const l = document.createElement("span");
+          l.className = "hs";
+          l.style.marginLeft = "8px";
+          l.textContent = d.hour_loss.toFixed(1) + "% loss (1h)";
+          st.appendChild(l);
+        }
+        tile.append(nm, hs, lat, st);
+        grid.appendChild(tile);
+      }
+    } catch (e) { /* keep last render on transient errors */ }
+  }
+  refresh();
+  setInterval(refresh, {{ refresh }} * 1000);
+})();
+</script>
+</body>
+</html>

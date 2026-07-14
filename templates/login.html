@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — Ascom Ping Monitor</title>
+<link rel="icon" href="{{ favicon_url }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script>
+  (function () {
+    var t = localStorage.getItem("pingmon-theme") || "{{ theme }}";
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+</head>
+<body>
+<div class="login-wrap">
+  <form class="login-card" method="post" autocomplete="off">
+    <img src="{{ logo_url }}" alt="ascom">
+    <div class="sub">Ping Monitor — sign in</div>
+    {% if error %}<div class="login-error">{{ error }}</div>{% endif %}
+    <div style="margin-bottom:14px;">
+      <label class="f-label" for="username">Username</label>
+      <input type="text" id="username" name="username" required autofocus>
+    </div>
+    <div style="margin-bottom:20px;">
+      <label class="f-label" for="password">Password</label>
+      <input type="password" id="password" name="password" required>
+    </div>
+    <button class="btn primary" style="width:100%;justify-content:center;" type="submit">Sign in</button>
+  </form>
+</div>
+</body>
+</html>

@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="page-title">Time-of-day heatmap</h1>
+<div class="card">
+  <h2>Find recurring patterns</h2>
+  <p class="card-sub">Each cell is one hour of one day. Dark cells are worse.
+    Recurring problems — nightly backups, morning congestion, a flaky lift shaft AP —
+    show up as dark columns or rows. Hover any cell for exact numbers.</p>
+  <div class="filter-row" style="margin-bottom:12px;">
+    <select id="hm-device" style="width:auto;"></select>
+    <div class="range-group" id="hm-metric">
+      <button class="range-btn active" data-m="2">Avg latency</button>
+      <button class="range-btn" data-m="3">Max latency</button>
+      <button class="range-btn" data-m="4">Loss %</button>
+      <button class="range-btn" data-m="5">Jitter</button>
+    </div>
+    <div class="range-group" id="hm-days">
+      <button class="range-btn active" data-d="7">7 d</button>
+      <button class="range-btn" data-d="14">14 d</button>
+      <button class="range-btn" data-d="30">30 d</button>
+    </div>
+    <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-2);">
+      <input type="checkbox" id="hm-values"> show values
+    </label>
+  </div>
+  <div id="hm-box" style="overflow-x:auto;"></div>
+  <div id="hm-legend" style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:11.5px;color:var(--muted);"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  // sequential blue ramp, light -> dark (one hue = magnitude)
+  const RAMP = ["#cde2fb","#b7d3f6","#9ec5f4","#86b6ef","#6da7ec","#5598e7",
+                "#3987e5","#2a78d6","#256abf","#1c5cab","#184f95","#104281","#0d366b"];
+  let metric = 2, days = 7, deviceId = null, showValues = false;
+  const UNITS = {2: " ms", 3: " ms", 4: " %", 5: " ms"};
+  const NAMES = {2: "avg latency", 3: "max latency", 4: "loss", 5: "jitter"};
+
+  async function loadDevices() {
+    const data = await api("/api/devices");
+    const sel = document.getElementById("hm-device");
+    sel.innerHTML = "";
+    for (const d of data.devices) {
+      const o = document.createElement("option");
+      o.value = d.id;
+      o.textContent = d.name + " (" + d.host + ")";
+      sel.appendChild(o);
+    }
+    if (data.devices.length) {
+      deviceId = data.devices[0].id;
+      sel.value = deviceId;
+    }
+  }
+
+  async function draw() {
+    if (deviceId == null) {
+      document.getElementById("hm-box").innerHTML =
+        '<p class="muted">Add a device first.</p>';
+      return;
+    }
+    const data = await api("/api/heatmap?device=" + deviceId + "&days=" + days);
+    const cells = {};        // "date|hour" -> row
+    const dates = new Set();
+    let maxV = 0;
+    for (const c of data.cells) {
+      cells[c[0] + "|" + c[1]] = c;
+      dates.add(c[0]);
+      const v = c[metric];
+      if (v != null && v > maxV) maxV = v;
+    }
+    if (maxV <= 0) maxV = 1;
+    const dateList = Array.from(dates).sort();
+
+    const box = document.getElementById("hm-box");
+    box.innerHTML = "";
+    const tbl = document.createElement("table");
+    tbl.style.borderCollapse = "separate";
+    tbl.style.borderSpacing = "2px";     // 2px surface gap between cells
+    // header row: hours
+    const hr = document.createElement("tr");
+    hr.appendChild(document.createElement("th"));
+    for (let h = 0; h < 24; h++) {
+      const th = document.createElement("th");
+      th.textContent = h;
+      th.style.cssText = "font-size:10px;color:var(--muted);font-weight:400;padding:0 2px;";
+      hr.appendChild(th);
+    }
+    tbl.appendChild(hr);
+
+    for (const d of dateList) {
+      const tr = document.createElement("tr");
+      const lab = document.createElement("td");
+      lab.textContent = d;
+      lab.style.cssText = "font-size:11px;color:var(--ink-2);padding-right:6px;white-space:nowrap;font-variant-numeric:tabular-nums;";
+      tr.appendChild(lab);
+      for (let h = 0; h < 24; h++) {
+        const td = document.createElement("td");
+        const c = cells[d + "|" + h];
+        const v = c ? c[metric] : null;
+        td.style.cssText = "width:30px;height:22px;border-radius:3px;text-align:center;font-size:9.5px;";
+        if (v == null) {
+          td.style.background = "var(--surface-2)";
+          td.title = d + " " + h + ":00 — no data";
+        } else {
+          const idx = Math.min(RAMP.length - 1,
+                               Math.floor((v / maxV) * (RAMP.length - 1)));
+          td.style.background = RAMP[idx];
+          td.title = d + " " + String(h).padStart(2, "0") + ":00 — "
+            + NAMES[metric] + " " + v + UNITS[metric]
+            + " · avg " + (c[2] ?? "—") + " ms · max " + (c[3] ?? "—")
+            + " ms · loss " + c[4] + "% · jitter " + (c[5] ?? "—")
+            + " ms · " + c[6] + " pings";
+          if (showValues) {
+            td.textContent = Math.round(v);
+            td.style.color = idx > 6 ? "#fff" : "#0b0b0b";
+          }
+        }
+        tr.appendChild(td);
+      }
+      tbl.appendChild(tr);
+    }
+    box.appendChild(tbl);
+
+    // legend
+    const leg = document.getElementById("hm-legend");
+    leg.innerHTML = "";
+    const t1 = document.createElement("span");
+    t1.textContent = "0" + UNITS[metric];
+    leg.appendChild(t1);
+    const grad = document.createElement("span");
+    grad.style.cssText = "display:inline-block;width:140px;height:10px;border-radius:5px;"
+      + "background:linear-gradient(to right," + RAMP[0] + "," + RAMP[6] + "," + RAMP[12] + ");";
+    leg.appendChild(grad);
+    const t2 = document.createElement("span");
+    t2.textContent = (Math.round(maxV * 10) / 10) + UNITS[metric] + " (worst " + NAMES[metric] + ")";
+    leg.appendChild(t2);
+  }
+
+  document.getElementById("hm-device").addEventListener("change", ev => {
+    deviceId = parseInt(ev.target.value, 10); draw().catch(e => toast(e.message, true));
+  });
+  document.getElementById("hm-metric").addEventListener("click", ev => {
+    const b = ev.target.closest(".range-btn"); if (!b) return;
+    document.querySelectorAll("#hm-metric .range-btn").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    metric = parseInt(b.dataset.m, 10); draw().catch(e => toast(e.message, true));
+  });
+  document.getElementById("hm-days").addEventListener("click", ev => {
+    const b = ev.target.closest(".range-btn"); if (!b) return;
+    document.querySelectorAll("#hm-days .range-btn").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    days = parseInt(b.dataset.d, 10); draw().catch(e => toast(e.message, true));
+  });
+  document.getElementById("hm-values").addEventListener("change", ev => {
+    showValues = ev.target.checked; draw().catch(e => toast(e.message, true));
+  });
+
+  loadDevices().then(draw).catch(e => toast(e.message, true));
+})();
+</script>
+{% endblock %}
