@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  Ascom Ping Monitor — Proxmox one-liner installer
+#  Ascom Network Monitor — Proxmox one-liner installer
 #
 #  Run this in the PROXMOX HOST shell (Datacenter → your node → Shell):
 #
@@ -33,7 +33,7 @@ if [[ "$GITHUB_REPO" == YOUR-GITHUB-USERNAME/* ]]; then
 fi
 
 echo "==============================================="
-echo "  Ascom Ping Monitor — LXC container setup"
+echo "  Ascom Network Monitor — LXC container setup"
 echo "  Source: github.com/${GITHUB_REPO} (${BRANCH})"
 echo "==============================================="
 
@@ -133,7 +133,7 @@ pct exec "$CTID" -- bash -c "
 IP=$(pct exec "$CTID" -- hostname -I 2>/dev/null | awk '{print $1}')
 echo
 echo "=============================================================="
-echo "  ✔ Ascom Ping Monitor container is ready."
+echo "  ✔ Ascom Network Monitor container is ready."
 echo
 echo "  Container:  ${CTID} (${CTHOST})"
 echo "  Web GUI:    http://${IP:-<container-ip>}:${PORT}"

@@ -41,6 +41,8 @@
         loss: ["warn", "▲ Packet loss"],
         "loss-clear": ["up", "✔ Loss ended"],
         "mac-change": ["warn", "⇄ MAC change"],
+        "check-down": ["warn", "▲ Service check failed"],
+        "check-up": ["up", "✔ Service recovered"],
       };
       const [cls, label] = KINDS[e.type] || ["unknown", e.type];
       const pill = document.createElement("span");

@@ -28,6 +28,14 @@ DEFAULTS = {
     "loss_window_min": 15,          # sliding window for loss detection
     "traceroute_on_fail": True,     # run traceroute when a device goes down/lossy
     "correlate_min_devices": 3,     # >= this many devices failing together = upstream flag
+    "alert_check": True,            # email when a TCP/HTTP/DNS check fails
+    "cert_warn_days": 21,           # warn when a TLS cert expires within N days
+
+    # -------- discovery / rogue devices --------
+    "rogue_scan_enabled": False,    # periodically sweep the subnet for new devices
+    "rogue_scan_subnet": "",        # CIDR, or blank = auto-detect the local /24
+    "rogue_scan_interval_min": 30,  # minutes between sweeps
+    "alert_rogue": True,            # email when a new MAC appears (after baseline)
 
     # -------- maintenance window (daily) --------
     "maint_enabled": False,         # suppress ALL alert emails during the window
@@ -47,6 +55,11 @@ DEFAULTS = {
     "alert_down": True,             # email when a device goes down
     "alert_recovery": True,         # email when a device recovers
     "alert_cooldown_min": 15,       # min minutes between repeat down-alerts per device
+
+    # -------- packet capture --------
+    "capture_enabled": False,       # master on/off for tcpdump packet capture
+    "capture_max_seconds": 60,      # UI upper bound for a single capture
+    "capture_max_packets": 5000,    # UI upper bound for a single capture
 
     # -------- interface --------
     "default_theme": "auto",        # auto | light | dark
@@ -70,6 +83,10 @@ CLAMPS = {
     "loss_window_min": (2, 120),
     "correlate_min_devices": (2, 50),
     "wallboard_refresh": (2, 300),
+    "capture_max_seconds": (1, 300),
+    "capture_max_packets": (10, 100000),
+    "cert_warn_days": (1, 365),
+    "rogue_scan_interval_min": (5, 1440),
 }
 
 _HHMM = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d$")

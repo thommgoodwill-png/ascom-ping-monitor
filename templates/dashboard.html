@@ -94,7 +94,9 @@
       pill.className = "pill " + cls;
       pill.textContent = label;
       card.querySelector(".name").textContent = d.name;
-      card.querySelector(".host").textContent = d.host + (d.mac ? " · " + d.mac : "");
+      card.querySelector(".host").textContent = d.host
+        + (d.mac ? " · " + d.mac : "")
+        + (d.vendor ? " · " + d.vendor : "");
       card.querySelector(".stats").innerHTML =
         stat("Last ping", ms(d.last_latency, d.eff_warn, d.eff_crit)) +
         stat("1 h avg", ms(d.hour_avg, d.eff_warn, d.eff_crit)) +
@@ -106,6 +108,28 @@
           '<span class="' + (d.hour_loss > 0 ? "v-crit" : "v-good") + '">' +
           d.hour_loss.toFixed(1) + '<span class="unit"> %</span></span>') +
         stat("Checked", '<span class="muted">' + fmtAgo(d.last_ts) + "</span>");
+      // service-check badges (TCP ports / HTTP / DNS)
+      let checksBox = card.querySelector(".checks");
+      if (!checksBox) {
+        checksBox = document.createElement("div");
+        checksBox.className = "checks";
+        checksBox.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 8px;";
+        card.querySelector(".stats").after(checksBox);
+      }
+      checksBox.innerHTML = "";
+      const checks = d.checks || {};
+      for (const [kind, c] of Object.entries(checks)) {
+        const label = kind === "dns" ? "DNS" : kind === "http" ? "HTTP" : kind.toUpperCase();
+        const pill = document.createElement("span");
+        pill.className = "pill " + (c.ok ? "up" : "down");
+        let txt = (c.ok ? "● " : "✖ ") + label;
+        if (c.ok && c.ms != null) txt += " " + c.ms + "ms";
+        if (kind === "http" && c.cert_days != null)
+          txt += " · cert " + c.cert_days + "d";
+        pill.textContent = txt;
+        if (c.cert_warn) pill.className = "pill warn";
+        checksBox.appendChild(pill);
+      }
     }
     // remove cards for deleted devices
     const ids = new Set(data.devices.map(d => "dev-" + d.id));

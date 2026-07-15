@@ -27,6 +27,16 @@
       </div>
       <div class="f-help">Per-device thresholds — e.g. a VPN link that is always ~80 ms. Blank = global.</div>
     </div>
+    <div>
+      <label class="f-label" for="add-ports">TCP ports to check <span class="muted">(optional)</span></label>
+      <input type="text" id="add-ports" placeholder="443, 22, 3389">
+      <div class="f-help">Comma-separated. Checks the service is actually listening, not just that the host pings.</div>
+    </div>
+    <div>
+      <label class="f-label" for="add-url">HTTP(S) health URL <span class="muted">(optional)</span></label>
+      <input type="text" id="add-url" placeholder="https://host/health">
+      <div class="f-help">Checks status code, response time and TLS certificate expiry.</div>
+    </div>
     <div style="display:flex;align-items:flex-end;">
       <button class="btn primary" id="add-btn">+ Add device</button>
     </div>
@@ -100,7 +110,7 @@
       const tdMac = document.createElement("td");
       tdMac.className = "mono";
       tdMac.style.fontSize = "12px";
-      tdMac.textContent = d.mac || "—";
+      tdMac.textContent = (d.mac || "—") + (d.vendor ? "  " + d.vendor : "");
       tdMac.title = d.mac ? "picked up from the ARP table" :
         "no MAC yet — only learnable for devices on the monitor's own subnet";
       tr.appendChild(tdMac);
@@ -183,18 +193,18 @@
     const iv = document.getElementById("add-interval").value.trim();
     const wo = document.getElementById("add-warn").value.trim();
     const co = document.getElementById("add-crit").value.trim();
+    const ports = document.getElementById("add-ports").value.trim();
+    const url = document.getElementById("add-url").value.trim();
     if (!name || !host) { toast("Name and host are required", true); return; }
     try {
       await api("/api/devices", {
         method: "POST",
         body: JSON.stringify({ name: name, host: host, interval_override: iv || null,
-                               warn_override: wo || null, crit_override: co || null }),
+                               warn_override: wo || null, crit_override: co || null,
+                               tcp_ports: ports || null, check_url: url || null }),
       });
-      document.getElementById("add-name").value = "";
-      document.getElementById("add-host").value = "";
-      document.getElementById("add-interval").value = "";
-      document.getElementById("add-warn").value = "";
-      document.getElementById("add-crit").value = "";
+      ["add-name","add-host","add-interval","add-warn","add-crit","add-ports","add-url"]
+        .forEach(id => document.getElementById(id).value = "");
       toast("Device added — pinging starts within a few seconds");
       load();
     } catch (e) { toast(e.message, true); }

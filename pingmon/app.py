@@ -2,14 +2,17 @@
 import functools
 import logging
 import os
+import re
 import secrets
+import signal
 import sys
+import threading
 import time
 
 from flask import (Flask, jsonify, redirect, render_template, request,
                    send_from_directory, session, url_for)
 
-from . import database, settings
+from . import capture, database, netcheck, netdiag, oui, settings
 from .emailer import Emailer, REPORT_KINDS
 from .monitor import Monitor
 
@@ -98,9 +101,11 @@ def create_app():
             return redirect(url_for("static", filename="branding/favicon.svg"))
         return send_from_directory(user_logo_dir, name)
 
+    is_desktop = getattr(sys, "frozen", False) or os.name == "nt"
+
     @app.context_processor
     def inject_branding():
-        ctx = {}
+        ctx = {"is_desktop": is_desktop}
         ctx["logo_url"] = (url_for("userlogo") if _find_logo(user_logo_dir)
                            else url_for("static", filename="branding/" + static_logo))
         ctx["favicon_url"] = (url_for("userfavicon") if _find_favicon()
@@ -152,6 +157,24 @@ def register_routes(app):
         session.clear()
         return redirect(url_for("login"))
 
+    @app.route("/api/shutdown", methods=["POST"])
+    @login_required
+    def api_shutdown():
+        """Stop the whole application. Mainly for the Windows exe so users can
+        quit without Task Manager."""
+        log.info("shutdown requested from the GUI")
+
+        def _stop():
+            time.sleep(0.4)
+            try:
+                monitor.stop()
+                emailer.stop()
+            except Exception:
+                pass
+            os._exit(0)   # hard exit — reliably stops waitress on every OS
+        threading.Thread(target=_stop, daemon=True).start()
+        return jsonify(ok=True)
+
     # ---------------- pages ----------------
 
     @app.route("/")
@@ -197,6 +220,182 @@ def register_routes(app):
                                theme=settings.get("default_theme"),
                                refresh=settings.get("wallboard_refresh"))
 
+    @app.route("/capture")
+    @login_required
+    def capture_page():
+        return render_template("capture.html", page="capture",
+                               theme=settings.get("default_theme"))
+
+    @app.route("/tools")
+    @login_required
+    def tools_page():
+        return render_template("tools.html", page="tools",
+                               theme=settings.get("default_theme"))
+
+    # ---------------- API: on-demand network tools ----------------
+
+    @app.route("/api/tools/env")
+    @login_required
+    def api_tools_env():
+        return jsonify(default_subnet=netdiag.local_subnet(),
+                       snmp=netdiag.snmp_available(),
+                       iperf=netdiag.iperf_available())
+
+    @app.route("/api/tools/discover", methods=["POST"])
+    @login_required
+    def api_tools_discover():
+        cidr = (request.get_json(force=True) or {}).get("subnet", "").strip()
+        cidr = cidr or netdiag.local_subnet()
+        try:
+            found = netdiag.discover(cidr)
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+        # merge known-device baseline info
+        known = {k["mac"]: k for k in database.list_known_devices()}
+        monitored = {d["host"] for d in database.list_devices()}
+        for f in found:
+            k = known.get(f["mac"]) if f["mac"] else None
+            f["known"] = bool(k)
+            f["monitored"] = f["ip"] in monitored
+        return jsonify(subnet=cidr, devices=found)
+
+    @app.route("/api/tools/path", methods=["POST"])
+    @login_required
+    def api_tools_path():
+        d = request.get_json(force=True) or {}
+        host = (d.get("host") or "").strip()
+        if not host:
+            return jsonify(error="host required"), 400
+        cycles = max(1, min(20, int(d.get("cycles", 5))))
+        return jsonify(netdiag.path_analysis(host, cycles))
+
+    @app.route("/api/tools/snmp", methods=["POST"])
+    @login_required
+    def api_tools_snmp():
+        d = request.get_json(force=True) or {}
+        host = (d.get("host") or "").strip()
+        if not host:
+            return jsonify(error="host required"), 400
+        return jsonify(netdiag.snmp_get(host, d.get("community", "public").strip()
+                                        or "public", d.get("version", "2c")))
+
+    @app.route("/api/tools/iperf", methods=["POST"])
+    @login_required
+    def api_tools_iperf():
+        d = request.get_json(force=True) or {}
+        host = (d.get("host") or "").strip()
+        if not host:
+            return jsonify(error="host required"), 400
+        return jsonify(netdiag.iperf_test(host, max(1, min(30, int(d.get("seconds", 5)))),
+                                          bool(d.get("reverse")),
+                                          int(d.get("port", 5201))))
+
+    @app.route("/api/tools/known")
+    @login_required
+    def api_tools_known():
+        rows = database.list_known_devices()
+        for r in rows:
+            if not r.get("vendor") and r.get("mac"):
+                r["vendor"] = oui.vendor(r["mac"])
+        return jsonify(devices=rows)
+
+    @app.route("/api/tools/acknowledge", methods=["POST"])
+    @login_required
+    def api_tools_ack():
+        mac = (request.get_json(force=True) or {}).get("mac", "")
+        database.acknowledge_device(mac)
+        return jsonify(ok=True)
+
+    # ---------------- API: packet capture ----------------
+
+    @app.route("/api/capture/env")
+    @login_required
+    def api_capture_env():
+        return jsonify(enabled=settings.get("capture_enabled"),
+                       available=capture.available(),
+                       interfaces=capture.list_interfaces(),
+                       max_seconds=settings.get("capture_max_seconds"),
+                       max_packets=settings.get("capture_max_packets"),
+                       captures=capture.list_captures())
+
+    @app.route("/api/capture/start", methods=["POST"])
+    @login_required
+    def api_capture_start():
+        data = request.get_json(force=True) or {}
+        secs = min(int(data.get("seconds", 15) or 15),
+                   settings.get("capture_max_seconds"))
+        pkts = min(int(data.get("packets", 1000) or 1000),
+                   settings.get("capture_max_packets"))
+        try:
+            job = capture.start_capture(data.get("iface", "any"),
+                                        data.get("bpf", ""), secs, pkts)
+        except Exception as e:
+            return jsonify(error=str(e)), 400
+        return jsonify(id=job.id)
+
+    @app.route("/api/capture/status/<job_id>")
+    @login_required
+    def api_capture_status(job_id):
+        job = capture.get_job(job_id)
+        if not job:
+            return jsonify(error="not found"), 404
+        return jsonify(job.status())
+
+    @app.route("/api/capture/file/<path:fname>")
+    @login_required
+    def api_capture_file(fname):
+        if "/" in fname or "\\" in fname or not fname.endswith(".pcap"):
+            return jsonify(error="bad filename"), 400
+        return send_from_directory(capture.CAP_DIR, fname, as_attachment=True)
+
+    @app.route("/api/capture/delete", methods=["POST"])
+    @login_required
+    def api_capture_delete():
+        fname = (request.get_json(force=True) or {}).get("file", "")
+        try:
+            capture.delete_capture(fname)
+        except (ValueError, OSError) as e:
+            return jsonify(error=str(e)), 400
+        return jsonify(ok=True)
+
+    @app.route("/api/capture/view/<path:fname>")
+    @login_required
+    def api_capture_view(fname):
+        if "/" in fname or "\\" in fname or not fname.endswith(".pcap"):
+            return jsonify(error="bad filename"), 400
+        path = os.path.join(capture.CAP_DIR, fname)
+        try:
+            limit = max(1, min(5000, int(request.args.get("limit", 1000))))
+        except ValueError:
+            limit = 1000
+        try:
+            rows, total = capture.summarize_file(path, limit)
+        except FileNotFoundError:
+            return jsonify(error="not found"), 404
+        except Exception as e:
+            return jsonify(error=str(e)), 400
+        return jsonify(file=fname, count=total, shown=len(rows), packets=rows)
+
+    @app.route("/api/capture/upload", methods=["POST"])
+    @login_required
+    def api_capture_upload():
+        if not settings.get("capture_enabled"):
+            return jsonify(error="packet capture is disabled in Settings"), 400
+        f = request.files.get("file")
+        if not f or not f.filename:
+            return jsonify(error="no file"), 400
+        name = os.path.basename(f.filename)
+        if not name.lower().endswith((".pcap", ".pcapng", ".cap")):
+            return jsonify(error="please upload a .pcap / .pcapng / .cap file"), 400
+        os.makedirs(capture.CAP_DIR, exist_ok=True)
+        # store under a safe, unique name
+        safe = "upload-" + re.sub(r"[^A-Za-z0-9._-]", "_", name)
+        if not safe.endswith(".pcap"):
+            safe += ".pcap"
+        dest = os.path.join(capture.CAP_DIR, safe)
+        f.save(dest)
+        return jsonify(file=safe)
+
     # ---------------- API: devices ----------------
 
     @app.route("/api/devices")
@@ -217,11 +416,13 @@ def register_routes(app):
                 **d,
                 "eff_warn": eff_warn,
                 "eff_crit": eff_crit,
+                "vendor": oui.vendor(d.get("mac")),
                 "state": (st.get("state", "unknown") if d["enabled"] else "disabled"),
                 "in_loss": st.get("in_loss", False),
                 "last_latency": st.get("last_latency"),
                 "last_ts": st.get("last_ts"),
                 "down_since": st.get("down_since"),
+                "checks": st.get("checks", {}),
                 "hour_avg": round(stats["avg_l"], 1) if stats["avg_l"] is not None else None,
                 "hour_max": round(stats["max_l"], 1) if stats["max_l"] is not None else None,
                 "hour_jitter": round(stats["avg_j"], 1) if stats["avg_j"] is not None else None,
@@ -248,6 +449,14 @@ def register_routes(app):
         for key in ("warn_override", "crit_override"):
             if data.get(key) not in (None, ""):
                 database.update_device(dev_id, **{key: _parse_ms(data[key])})
+        extra = {}
+        if data.get("tcp_ports"):
+            extra["tcp_ports"] = ",".join(str(p) for p in
+                                          netcheck.parse_ports(data["tcp_ports"]))
+        if data.get("check_url"):
+            extra["check_url"] = str(data["check_url"]).strip()[:300]
+        if extra:
+            database.update_device(dev_id, **extra)
         return jsonify(id=dev_id)
 
     @app.route("/api/devices/<int:dev_id>", methods=["PUT"])
@@ -269,6 +478,11 @@ def register_routes(app):
             fields["warn_override"] = _parse_ms(data["warn_override"])
         if "crit_override" in data:
             fields["crit_override"] = _parse_ms(data["crit_override"])
+        if "tcp_ports" in data:
+            fields["tcp_ports"] = ",".join(str(p) for p in
+                                           netcheck.parse_ports(data["tcp_ports"]))
+        if "check_url" in data:
+            fields["check_url"] = str(data["check_url"] or "").strip()[:300]
         database.update_device(dev_id, **fields)
         return jsonify(ok=True)
 

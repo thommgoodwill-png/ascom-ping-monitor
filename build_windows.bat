@@ -26,9 +26,9 @@ echo === Creating build environment...
 %PY% -m venv build-venv || (echo venv creation failed & pause & exit /b 1)
 call build-venv\Scripts\activate.bat
 
-echo === Installing dependencies (flask, waitress, pyinstaller)...
+echo === Installing dependencies (flask, waitress, pystray, pillow, pyinstaller)...
 pip install --quiet --upgrade pip
-pip install --quiet flask waitress pyinstaller || (echo pip install failed & pause & exit /b 1)
+pip install --quiet flask waitress pystray pillow pyinstaller || (echo pip install failed & pause & exit /b 1)
 
 echo === Building AscomPingMonitor.exe (takes a minute)...
 pyinstaller --noconfirm --clean --onefile --noconsole ^
@@ -36,7 +36,9 @@ pyinstaller --noconfirm --clean --onefile --noconsole ^
     --icon "static\branding\favicon.ico" ^
     --add-data "templates;templates" ^
     --add-data "static;static" ^
+    --add-data "pingmon\data;pingmon\data" ^
     --hidden-import waitress ^
+    --hidden-import pystray._win32 ^
     run.py
 if errorlevel 1 (echo BUILD FAILED & pause & exit /b 1)
 

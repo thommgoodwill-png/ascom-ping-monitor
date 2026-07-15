@@ -1,4 +1,4 @@
-"""SQLite storage layer for the Ascom Ping Monitor."""
+"""SQLite storage layer for the Ascom Network Monitor."""
 import os
 import sqlite3
 import threading
@@ -84,6 +84,13 @@ def init_db():
     _ensure_column(db, "devices", "crit_override", "crit_override REAL")
     _ensure_column(db, "devices", "mac", "mac TEXT")
     _ensure_column(db, "devices", "mac_ts", "mac_ts REAL")
+    _ensure_column(db, "devices", "tcp_ports", "tcp_ports TEXT")
+    _ensure_column(db, "devices", "check_url", "check_url TEXT")
+    db.execute("""CREATE TABLE IF NOT EXISTS known_devices (
+        mac TEXT PRIMARY KEY,
+        ip TEXT, vendor TEXT, name TEXT,
+        first_seen REAL NOT NULL, last_seen REAL NOT NULL,
+        acknowledged INTEGER NOT NULL DEFAULT 0)""")
     db.commit()
 
 
@@ -114,7 +121,7 @@ def add_device(name, host, enabled=1, interval_override=None):
 
 def update_device(dev_id, **fields):
     allowed = {"name", "host", "enabled", "interval_override", "sort",
-               "warn_override", "crit_override"}
+               "warn_override", "crit_override", "tcp_ports", "check_url"}
     sets, vals = [], []
     for k, v in fields.items():
         if k in allowed:
@@ -294,6 +301,37 @@ def recent_problem_devices(since_ts):
         """SELECT DISTINCT device_id FROM events
            WHERE ts >= ? AND type IN ('down','loss')""", (since_ts,)).fetchall()
     return [r["device_id"] for r in rows]
+
+
+def seen_device(mac, ip, vendor, ts):
+    """Upsert a device seen on the LAN. Returns True if it's brand new."""
+    db = get_db()
+    row = db.execute("SELECT mac FROM known_devices WHERE mac=?", (mac,)).fetchone()
+    if row:
+        db.execute("UPDATE known_devices SET ip=?, last_seen=?, "
+                   "vendor=COALESCE(vendor,?) WHERE mac=?", (ip, ts, vendor, mac))
+        db.commit()
+        return False
+    db.execute("INSERT INTO known_devices(mac, ip, vendor, first_seen, last_seen) "
+               "VALUES(?,?,?,?,?)", (mac, ip, vendor, ts, ts))
+    db.commit()
+    return True
+
+
+def list_known_devices():
+    return [dict(r) for r in get_db().execute(
+        "SELECT * FROM known_devices ORDER BY last_seen DESC").fetchall()]
+
+
+def acknowledge_device(mac):
+    db = get_db()
+    db.execute("UPDATE known_devices SET acknowledged=1 WHERE mac=?", (mac,))
+    db.commit()
+
+
+def known_device_count():
+    r = get_db().execute("SELECT COUNT(*) AS n FROM known_devices").fetchone()
+    return r["n"]
 
 
 def set_event_trace(event_id, trace):

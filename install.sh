@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ascom Ping Monitor — installer for a Debian/Ubuntu Proxmox LXC container.
+# Ascom Network Monitor — installer for a Debian/Ubuntu Proxmox LXC container.
 # Run as root inside the container:  bash install.sh
 set -euo pipefail
 
@@ -21,7 +21,7 @@ echo "==> Installing OS packages (python3, venv, iputils-ping, traceroute)…"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq python3 python3-venv python3-pip iputils-ping traceroute \
-  curl ca-certificates tar >/dev/null
+  mtr-tiny tcpdump snmp iperf3 curl ca-certificates tar >/dev/null
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo /tmp)"
 if [[ ! -d "$SRC_DIR/pingmon" ]]; then
@@ -61,7 +61,7 @@ fi
 echo "==> Installing systemd service…"
 cat > /etc/systemd/system/${SERVICE}.service <<EOF
 [Unit]
-Description=Ascom Ping Monitor
+Description=Ascom Network Monitor
 After=network-online.target
 Wants=network-online.target
 
@@ -86,7 +86,7 @@ sleep 2
 IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 echo
 echo "=============================================================="
-echo "  Ascom Ping Monitor is installed and running."
+echo "  Ascom Network Monitor is installed and running."
 echo
 echo "  Web GUI:   http://${IP:-<container-ip>}:${PORT}"
 echo "  Username:  ascom"

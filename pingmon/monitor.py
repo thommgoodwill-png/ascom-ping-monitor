@@ -10,7 +10,7 @@ import subprocess
 import threading
 import time
 
-from . import database, settings
+from . import database, netcheck, oui, settings
 
 log = logging.getLogger("pingmon.monitor")
 
@@ -129,6 +129,9 @@ class DeviceWorker(threading.Thread):
         self.down_since = None
         self._mac_next = 0.0        # when to next refresh the MAC
         self._resolved_ip = None
+        self._checks_next = 0.0     # when to next run TCP/HTTP/DNS checks
+        self.checks = {}            # kind -> {ok, ms, detail, ts}
+        self._check_state = {}      # kind -> last ok (for change events)
 
     def interval(self):
         ov = self.device.get("interval_override")
@@ -159,6 +162,11 @@ class DeviceWorker(threading.Thread):
             self.last_ts = ts
             if success and ts >= self._mac_next:
                 self._refresh_mac(ts)
+            if success and ts >= self._checks_next:
+                self._checks_next = ts + 30
+                threading.Thread(target=self._run_checks, args=(ts,),
+                                 daemon=True, name=f"checks-{self.device['id']}"
+                                 ).start()
             self._update_state(ts, success)
             # sleep the remainder of the interval
             elapsed = time.time() - started
@@ -191,6 +199,45 @@ class DeviceWorker(threading.Thread):
             log.warning("%s %s", self.device["name"], detail)
         else:
             log.info("%s MAC learned: %s", self.device["name"], mac)
+
+    def _run_checks(self, ts):
+        """TCP port / HTTP / DNS checks; record events on ok->fail transitions."""
+        host = self.device["host"]
+        new = {}
+        # DNS timing (only meaningful for hostnames)
+        try:
+            socket.inet_aton(host)
+        except OSError:
+            ok, ms, detail = netcheck.dns_check(host)
+            new["dns"] = {"ok": ok, "ms": ms, "detail": detail, "ts": ts}
+        # TCP ports
+        for port in netcheck.parse_ports(self.device.get("tcp_ports")):
+            ok, ms, detail = netcheck.tcp_check(host, port)
+            new[f"tcp:{port}"] = {"ok": ok, "ms": ms, "detail": detail, "ts": ts}
+        # HTTP(S)
+        url = (self.device.get("check_url") or "").strip()
+        if url:
+            ok, ms, code, cert_days, detail = netcheck.http_check(url)
+            new["http"] = {"ok": ok, "ms": ms, "detail": detail,
+                           "code": code, "cert_days": cert_days, "ts": ts}
+            if cert_days is not None and cert_days <= settings.get("cert_warn_days"):
+                new["http"]["cert_warn"] = True
+        # emit change events
+        for kind, res in new.items():
+            prev = self._check_state.get(kind)
+            if prev is not None and prev != res["ok"]:
+                label = {"dns": "DNS", "http": "HTTP"}.get(kind, kind.upper())
+                if res["ok"]:
+                    database.record_event(self.device["id"], ts, "check-up",
+                                          f"{label} recovered ({res['detail']})")
+                else:
+                    eid = database.record_event(self.device["id"], ts, "check-down",
+                                                f"{label} check failed: {res['detail']}")
+                    if settings.get("alert_check"):
+                        self.monitor.emailer.check_failed(
+                            dict(self.device), ts, label, res["detail"])
+            self._check_state[kind] = res["ok"]
+        self.checks = new
 
     def _update_state(self, ts, success):
         if success:
@@ -269,6 +316,7 @@ class Monitor:
     def _manage(self):
         last_purge = 0.0
         last_loss_check = 0.0
+        last_rogue = 0.0
         while not self._stop.is_set():
             try:
                 self._reconcile()
@@ -280,12 +328,22 @@ class Monitor:
                     self._check_loss()
                 except Exception:
                     log.exception("loss check failed")
+            if (settings.get("rogue_scan_enabled")
+                    and time.time() - last_rogue > settings.get("rogue_scan_interval_min") * 60):
+                last_rogue = time.time()
+                threading.Thread(target=self._rogue_scan, daemon=True,
+                                 name="rogue-scan").start()
             if time.time() - last_purge > 3600:
                 last_purge = time.time()
                 try:
                     database.purge_old(settings.get("retention_days"))
                 except Exception:
                     log.exception("purge failed")
+                try:
+                    from . import capture
+                    capture.purge_old_captures()
+                except Exception:
+                    log.exception("capture purge failed")
             self._stop.wait(3)
 
     def _reconcile(self):
@@ -354,6 +412,29 @@ class Monitor:
                     f"packet loss back to {loss:.1f}% — episode over")
                 log.info("%s loss cleared (%.1f%%)", w.device["name"], loss)
 
+    def _rogue_scan(self):
+        """Sweep the subnet; email when a new MAC appears (after baseline)."""
+        from . import netdiag
+        cidr = settings.get("rogue_scan_subnet").strip() or netdiag.local_subnet()
+        try:
+            found = netdiag.discover(cidr)
+        except ValueError as e:
+            log.warning("rogue scan: %s", e)
+            return
+        ts = time.time()
+        had_baseline = database.known_device_count() > 0
+        for d in found:
+            if not d["mac"]:
+                continue
+            is_new = database.seen_device(d["mac"], d["ip"], d["vendor"], ts)
+            if is_new and had_baseline:
+                log.warning("ROGUE new device %s (%s, %s)",
+                            d["ip"], d["mac"], d["vendor"] or "unknown vendor")
+                if settings.get("alert_rogue"):
+                    self.emailer.rogue_device(d, ts)
+        log.info("rogue scan of %s complete: %d hosts, %d known",
+                 cidr, len(found), database.known_device_count())
+
     def status(self):
         """Live status per device id."""
         out = {}
@@ -366,6 +447,7 @@ class Monitor:
                 "consecutive_fails": w.consecutive_fails,
                 "down_since": w.down_since,
                 "in_loss": dev_id in self._in_loss,
+                "checks": w.checks,
             }
         return out
 

@@ -108,7 +108,7 @@ class Emailer:
             raise RuntimeError("Gmail account / app password / recipients not configured")
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"] = f"Ascom Ping Monitor <{user}>"
+        msg["From"] = f"Ascom Network Monitor <{user}>"
         msg["To"] = ", ".join(recipients)
         msg.attach(MIMEText(html_body, "html"))
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as smtp:
@@ -135,7 +135,7 @@ class Emailer:
           </div>
           {_corr_banner(correlated)}
           {_trace_block(trace)}""")
-        self._enqueue(f"[Ascom Ping Monitor] DOWN: {device['name']} ({device['host']})", body)
+        self._enqueue(f"[Ascom Network Monitor] DOWN: {device['name']} ({device['host']})", body)
 
     def device_loss(self, device, ts, loss_pct, window_min, trace=None, correlated=None):
         if not (settings.get("email_enabled") and settings.get("alert_loss")):
@@ -157,7 +157,7 @@ class Emailer:
           </div>
           {_corr_banner(correlated)}
           {_trace_block(trace)}""")
-        self._enqueue(f"[Ascom Ping Monitor] PACKET LOSS {loss_pct:.0f}%: "
+        self._enqueue(f"[Ascom Network Monitor] PACKET LOSS {loss_pct:.0f}%: "
                       f"{device['name']} ({device['host']})", body)
 
     def device_recovered(self, device, ts, downtime):
@@ -177,13 +177,56 @@ class Emailer:
             <div style="margin-top:6px;color:#333;">Host: <b>{host}</b><br>
               Time: {_fmt_ts(ts)}<br>Downtime: {_fmt_duration(downtime)}</div>
           </div>""")
-        self._enqueue(f"[Ascom Ping Monitor] RECOVERED: {device['name']} ({device['host']})", body)
+        self._enqueue(f"[Ascom Network Monitor] RECOVERED: {device['name']} ({device['host']})", body)
+
+    def check_failed(self, device, ts, label, detail):
+        if not (settings.get("email_enabled") and settings.get("alert_check")):
+            return
+        if settings.in_maintenance(ts):
+            return
+        name = html.escape(device["name"])
+        host = html.escape(device["host"])
+        body = _shell(f"""
+          <div style="background:{WARN_BG};border-left:4px solid {WARN_FG};
+                      padding:14px 16px;border-radius:4px;">
+            <div style="font-size:16px;font-weight:700;color:{WARN_FG};">
+              &#9650; SERVICE CHECK FAILED &mdash; {name}</div>
+            <div style="margin-top:6px;color:#333;">Host: <b>{host}</b><br>
+              Time: {_fmt_ts(ts)}<br>Check: <b>{html.escape(label)}</b><br>
+              Result: {html.escape(detail)}<br>
+              <span style="color:#777;">(the device still answers ping &mdash; a
+              specific service/port is the problem, not the whole host)</span></div>
+          </div>""")
+        self._enqueue(f"[Ascom Network Monitor] {label} FAILED: "
+                      f"{device['name']} ({device['host']})", body)
+
+    def rogue_device(self, dev, ts):
+        if not (settings.get("email_enabled") and settings.get("alert_rogue")):
+            return
+        if settings.in_maintenance(ts):
+            return
+        vendor = f" &middot; {html.escape(dev['vendor'])}" if dev.get("vendor") else ""
+        body = _shell(f"""
+          <div style="background:#fff3cd;border-left:4px solid #e5c66a;
+                      padding:14px 16px;border-radius:4px;">
+            <div style="font-size:16px;font-weight:700;color:#7a5d00;">
+              &#9888; NEW DEVICE ON THE NETWORK</div>
+            <div style="margin-top:6px;color:#333;">
+              IP: <b>{html.escape(dev['ip'])}</b><br>
+              MAC: <b>{html.escape(dev['mac'])}</b>{vendor}<br>
+              First seen: {_fmt_ts(ts)}<br>
+              <span style="color:#777;">A MAC address not seen before has appeared
+              on the monitored subnet. If expected, acknowledge it on the Tools
+              page; if not, investigate.</span></div>
+          </div>""")
+        self._enqueue(f"[Ascom Network Monitor] New device: {dev['ip']} "
+                      f"({dev['mac']})", body)
 
     def send_test(self):
-        body = _shell("""<p>This is a test email from your Ascom Ping Monitor.
+        body = _shell("""<p>This is a test email from your Ascom Network Monitor.
           If you are reading this, Gmail sending is configured correctly.</p>""")
         # send synchronously so the GUI can report the real result
-        self._smtp_send("[Ascom Ping Monitor] Test email", body)
+        self._smtp_send("[Ascom Network Monitor] Test email", body)
 
     # ---------------- reports ----------------
 
@@ -349,7 +392,7 @@ def build_report(kind, start, end):
       {bad_html}
       {truncated_html}
     """
-    subject = f"[Ascom Ping Monitor] {kind}h report — {issues_label}"
+    subject = f"[Ascom Network Monitor] {kind}h report — {issues_label}"
     return subject, _shell(inner, title=f"{kind}-hour network report"), total_issues
 
 
@@ -371,7 +414,7 @@ def _hl(cond, bg=CRIT_BG, fg=CRIT_FG):
     return f"background:{bg};color:{fg};font-weight:700;" if cond else ""
 
 
-def _shell(inner, title="Ascom Ping Monitor"):
+def _shell(inner, title="Ascom Network Monitor"):
     return f"""<!DOCTYPE html>
 <html><body style="margin:0;padding:0;background:#f0f0ee;">
 <div style="max-width:760px;margin:0 auto;padding:24px 12px;
@@ -381,12 +424,12 @@ def _shell(inner, title="Ascom Ping Monitor"):
     <div style="padding:18px 22px;border-bottom:3px solid {ASCOM_RED};">
       <span style="font-size:26px;font-weight:800;letter-spacing:-1px;
                    color:{ASCOM_RED};">ascom</span>
-      <span style="font-size:13px;color:#888;margin-left:10px;">Ping Monitor</span>
+      <span style="font-size:13px;color:#888;margin-left:10px;">Network Monitor</span>
       <div style="font-size:15px;font-weight:600;margin-top:6px;">{title}</div>
     </div>
     <div style="padding:20px 22px;">{inner}</div>
     <div style="padding:12px 22px;background:#fafaf8;border-top:1px solid #eee;
                 font-size:11px;color:#999;">
-      Generated {_fmt_ts(time.time())} &middot; Ascom Ping Monitor</div>
+      Generated {_fmt_ts(time.time())} &middot; Ascom Network Monitor</div>
   </div>
 </div></body></html>"""

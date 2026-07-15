@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ascom Ping Monitor entry point (production server via waitress)."""
+"""Ascom Network Monitor entry point (production server via waitress)."""
 import logging
 import os
 import sys
@@ -24,16 +24,47 @@ from pingmon.app import create_app  # noqa: E402
 
 app = create_app()
 
+
+def _tray_icon(port):
+    """Optional Windows system-tray icon with Open / Quit. Needs pystray+Pillow;
+    silently skipped if unavailable (the GUI Quit button still works)."""
+    try:
+        import pystray
+        from PIL import Image, ImageDraw
+    except Exception:
+        return
+    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([2, 2, 62, 62], radius=12, fill=(218, 41, 28, 255))
+    try:
+        from PIL import ImageFont
+        f = ImageFont.truetype("arialbd.ttf", 46)
+    except Exception:
+        f = None
+    d.text((18, 4), "a", fill=(255, 255, 255, 255), font=f)
+
+    def _open(icon, item):
+        webbrowser.open(f"http://127.0.0.1:{port}")
+
+    def _quit(icon, item):
+        icon.stop()
+        os._exit(0)
+
+    menu = pystray.Menu(
+        pystray.MenuItem("Open Network Monitor", _open, default=True),
+        pystray.MenuItem("Quit", _quit))
+    icon = pystray.Icon("AscomNetworkMonitor", img, "Ascom Network Monitor", menu)
+    threading.Thread(target=icon.run, daemon=True, name="tray").start()
+
+
 if __name__ == "__main__":
     host = os.environ.get("PINGMON_HOST", "0.0.0.0")
     port = int(os.environ.get("PINGMON_PORT", "8080"))
-    if _FROZEN and os.environ.get("PINGMON_NO_BROWSER") != "1":
-        def _open():
-            try:
-                webbrowser.open(f"http://127.0.0.1:{port}")
-            except Exception:
-                pass
-        threading.Timer(1.5, _open).start()
+    if _FROZEN:
+        _tray_icon(port)
+        if os.environ.get("PINGMON_NO_BROWSER") != "1":
+            threading.Timer(1.5, lambda: webbrowser.open(
+                f"http://127.0.0.1:{port}")).start()
     try:
         from waitress import serve
         logging.getLogger("pingmon").info("listening on http://%s:%s", host, port)

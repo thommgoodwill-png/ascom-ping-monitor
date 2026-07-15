@@ -1,4 +1,4 @@
-# Ascom Ping Monitor
+# Ascom Network Monitor
 
 A self-contained network ping monitor for a Proxmox (Debian/Ubuntu) LXC container.
 It pings multiple devices on a configurable 0.2 s – 60 s timer, logs everything to
@@ -24,6 +24,25 @@ emails reports and failure alerts through Gmail.
 - **MAC address pickup** — learned automatically from the ARP table for
   same-subnet devices, shown throughout the GUI; a changed MAC is flagged as an
   event (device swap / DHCP change / IP conflict).
+- **Packet capture** — on-demand `tcpdump` capture with a BPF filter, a live
+  packet-summary table, and a downloadable **`.pcap` you open in Wireshark**.
+  Off by default. (Sees only traffic reaching the monitor unless a switch
+  SPAN/mirror port feeds it — see the Capture page's note.)
+- **Service checks per device** — TCP port checks (is 443/22/3389 actually
+  listening?), HTTP(S) health with status + response time + **TLS cert expiry**,
+  and DNS resolution timing. Shown as badges on the dashboard; failures alert
+  by email even while the host still pings.
+- **MAC vendor lookup** — MACs are resolved to a vendor name (Cisco, Ubiquiti,
+  Apple, Ascom…) from a bundled OUI table.
+- **Subnet discovery** — ping-sweep a range, list everything alive with MAC +
+  vendor, one-click add to monitoring.
+- **Rogue-device alerts** — background subnet scan remembers every MAC and
+  emails when a new one appears (Tools page lists all known devices to
+  acknowledge).
+- **Path analysis (MTR-style)** — repeated hop-by-hop probing showing which hop
+  loses packets or adds latency.
+- **SNMP query** — read standard system OIDs from managed switches/APs/UPS.
+- **Throughput test (iperf3)** — real bandwidth to a host running `iperf3 -s`.
 - Configurable **ping payload size** (large packets expose MTU/fragmentation faults).
 - Email reports (rolling **6 h / 12 h / 24 h**) contain a per-device summary plus
   **only the problem pings** (failures and pings above the warning threshold) —
@@ -64,7 +83,7 @@ defaults), then automatically:
 Alternatively, skip editing the files by passing the repo on the command line:
 
 ```bash
-GITHUB_REPO=thommgoodwill-png/ascom-ping-monitor bash -c "$(wget -qLO - https://raw.githubusercontent.com/thommgoodwill-png/ascom-ping-monitor/main/proxmox-lxc.sh)"
+GITHUB_REPO=youruser/ascom-ping-monitor bash -c "$(wget -qLO - https://raw.githubusercontent.com/youruser/ascom-ping-monitor/main/proxmox-lxc.sh)"
 ```
 
 ## Install option 2 — inside an existing container
@@ -72,7 +91,7 @@ GITHUB_REPO=thommgoodwill-png/ascom-ping-monitor bash -c "$(wget -qLO - https://
 Already have a Debian/Ubuntu LXC? Run this **inside the container**:
 
 ```bash
-bash -c "$(wget -qLO - https://raw.githubusercontent.com/thommgoodwill-png/ascom-ping-monitor/main/install.sh)"
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/YOUR-GITHUB-USERNAME/ascom-ping-monitor/main/install.sh)"
 ```
 
 `install.sh` detects it's running standalone and downloads the rest of the repo
@@ -136,6 +155,8 @@ Gmail no longer allows plain passwords over SMTP, so you need an **app password*
 | | Traceroute on failure | on |
 | | Correlation threshold | 3 devices within 2 min |
 | Maintenance | Daily quiet window (alerts muted) | off, 01:00–03:00 |
+| Capture | Packet capture enabled | off |
+| | Max capture length / packets | 60 s / 5000 |
 | Email | Email enabled (master switch) | off |
 | | Gmail address / app password / recipients | — |
 | Reports | 6-hour report | on |

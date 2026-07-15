@@ -1,4 +1,4 @@
-# Ascom Ping Monitor — Windows exe
+# Ascom Network Monitor — Windows exe
 
 The same monitor, built as a single portable `AscomPingMonitor.exe`. No Docker,
 no services to configure — double-click and your browser opens on the dashboard.
@@ -28,6 +28,20 @@ autostart). It contains everything: Python, the web GUI, the branding.
   (survives exe upgrades — just replace the exe with a newly built one).
 - To view from other machines, allow TCP 8080 through Windows Firewall
   (install-startup.bat below does this for you).
+
+## Stopping the app
+
+There are two easy ways to quit (no Task Manager needed):
+
+- **System-tray icon** — a red "a" icon appears in the notification area
+  (bottom-right, may be under the ^ overflow arrow). Right-click it →
+  **Quit**. Left-click/double-click reopens the dashboard.
+- **Quit button in the GUI** — a red **⏻ Quit** button in the top-right of the
+  web interface (shown only on the Windows exe) cleanly stops everything.
+
+Both shut the app down fully. If you installed it as a startup task, stop it
+with `uninstall-startup.bat` (as administrator) or, to stop just this run,
+`schtasks /end /tn "Ascom Network Monitor"`.
 
 ## Start with Windows (optional)
 
@@ -61,3 +75,7 @@ Set before launching, or in the scheduled task:
   to the event/email when done).
 - Everything else — all features, reports, Gmail, heatmap, wallboard, SLA —
   is identical to the Linux/Proxmox version.
+- **Packet capture on Windows** needs [Npcap](https://npcap.com) installed
+  (tick "Install Npcap in WinPcap API-compatible mode"). Without it the Capture
+  page reports the engine as unavailable; ping/monitoring still work fine.
+  The exe must run **as Administrator** to capture.

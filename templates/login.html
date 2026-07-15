@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in — Ascom Ping Monitor</title>
+<title>Sign in — Ascom Network Monitor</title>
 <link rel="icon" href="{{ favicon_url }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 <script>
@@ -17,7 +17,7 @@
 <div class="login-wrap">
   <form class="login-card" method="post" autocomplete="off">
     <img src="{{ logo_url }}" alt="ascom">
-    <div class="sub">Ping Monitor — sign in</div>
+    <div class="sub">Network Monitor — sign in</div>
     {% if error %}<div class="login-error">{{ error }}</div>{% endif %}
     <div style="margin-bottom:14px;">
       <label class="f-label" for="username">Username</label>
