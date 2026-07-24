@@ -176,6 +176,27 @@
   </div>
 </div>
 
+{% if is_admin %}
+<div class="card">
+  <h2>Access control <span class="muted">(admin only)</span></h2>
+  <p class="card-sub">Restrict who can sign in and enforce two-factor authentication.</p>
+  <div class="toggle-line">
+    <div class="t-text"><div class="t-title">Require 2FA for all users</div>
+      <div class="t-desc">Everyone must set up an authenticator app before they can use the dashboard.</div></div>
+    <label class="switch"><input type="checkbox" data-key="require_2fa"><span class="track"></span></label>
+  </div>
+  <div style="margin-top:14px;">
+    <label class="f-label">Allowed email addresses</label>
+    <textarea data-key="allowed_emails" rows="4" placeholder="*@ascom.com&#10;noc@partner.com&#10;*@*.ascom.co.uk"
+      style="width:100%;padding:8px 10px;border-radius:7px;border:1px solid var(--baseline);background:var(--surface);color:var(--ink);font:inherit;resize:vertical;"></textarea>
+    <div class="f-help">One pattern per line (or comma-separated). Wildcards allowed:
+      <code>*@ascom.com</code>, <code>*@*.ascom.co.uk</code>. A user whose account email
+      doesn't match any pattern is denied access. <b>Leave blank to allow all emails.</b>
+      Accounts with a blank email are always allowed (so the local <code>ascom</code> admin never locks out).</div>
+  </div>
+</div>
+{% endif %}
+
 <div class="card">
   <h2>Central hub — agent mode</h2>
   <p class="card-sub">Turn this installation into a <b>remote agent</b> for a central hub.

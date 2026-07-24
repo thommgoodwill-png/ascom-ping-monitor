@@ -106,7 +106,44 @@ def init_db():
         last_seen REAL,
         agent_version TEXT,
         agent_host TEXT)""")
+    # ---- users / roles / 2FA ----
+    db.execute("""CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'standard',      -- 'admin' | 'standard'
+        email TEXT,
+        totp_secret TEXT,
+        totp_enabled INTEGER NOT NULL DEFAULT 0,
+        disabled INTEGER NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL,
+        last_login REAL)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS invites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token TEXT NOT NULL UNIQUE,
+        email TEXT,
+        role TEXT NOT NULL DEFAULT 'standard',
+        created_at REAL NOT NULL,
+        expires_at REAL NOT NULL,
+        accepted INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT)""")
     db.commit()
+    _seed_default_admin(db)
+
+
+def _seed_default_admin(db):
+    """Ensure the built-in local admin (ascom) always exists, so a local
+    instance is never locked out. Created only if missing; never overwrites."""
+    from . import auth, settings as _settings
+    row = db.execute("SELECT id FROM users WHERE username=?",
+                     (_settings.GUI_USERNAME,)).fetchone()
+    if row is None:
+        db.execute(
+            "INSERT INTO users(username, password_hash, role, email, created_at) "
+            "VALUES(?,?,?,?,?)",
+            (_settings.GUI_USERNAME, auth.hash_password(_settings.GUI_PASSWORD),
+             "admin", "", time.time()))
+        db.commit()
 
 
 # ---------- devices ----------
@@ -357,6 +394,100 @@ def acknowledge_device(mac):
 def known_device_count():
     r = get_db().execute("SELECT COUNT(*) AS n FROM known_devices").fetchone()
     return r["n"]
+
+
+# ---------- users ----------
+
+def list_users():
+    rows = get_db().execute(
+        "SELECT id, username, role, email, totp_enabled, disabled, created_at, "
+        "last_login FROM users ORDER BY username").fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_user(user_id):
+    r = get_db().execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def get_user_by_name(username):
+    r = get_db().execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+    return dict(r) if r else None
+
+
+def add_user(username, password_hash, role="standard", email=""):
+    db = get_db()
+    cur = db.execute(
+        "INSERT INTO users(username, password_hash, role, email, created_at) "
+        "VALUES(?,?,?,?,?)", (username, password_hash, role, email, time.time()))
+    db.commit()
+    return cur.lastrowid
+
+
+def update_user(user_id, **fields):
+    allowed = {"password_hash", "role", "email", "totp_secret", "totp_enabled",
+               "disabled", "last_login", "username"}
+    sets, vals = [], []
+    for k, v in fields.items():
+        if k in allowed:
+            sets.append(f"{k}=?"); vals.append(v)
+    if not sets:
+        return
+    vals.append(user_id)
+    db = get_db()
+    db.execute(f"UPDATE users SET {', '.join(sets)} WHERE id=?", vals)
+    db.commit()
+
+
+def delete_user(user_id):
+    db = get_db()
+    db.execute("DELETE FROM users WHERE id=?", (user_id,))
+    db.commit()
+
+
+def count_admins(exclude_id=None):
+    q = "SELECT COUNT(*) AS n FROM users WHERE role='admin' AND disabled=0"
+    vals = []
+    if exclude_id is not None:
+        q += " AND id<>?"; vals.append(exclude_id)
+    return get_db().execute(q, vals).fetchone()["n"]
+
+
+# ---------- invites ----------
+
+def add_invite(token, email, role, expires_at, created_by):
+    db = get_db()
+    cur = db.execute(
+        "INSERT INTO invites(token, email, role, created_at, expires_at, created_by) "
+        "VALUES(?,?,?,?,?,?)",
+        (token, email, role, time.time(), expires_at, created_by))
+    db.commit()
+    return cur.lastrowid
+
+
+def get_invite(token):
+    r = get_db().execute("SELECT * FROM invites WHERE token=?", (token,)).fetchone()
+    return dict(r) if r else None
+
+
+def list_invites(pending_only=True):
+    q = "SELECT * FROM invites"
+    if pending_only:
+        q += " WHERE accepted=0 AND expires_at > " + str(time.time())
+    q += " ORDER BY created_at DESC"
+    return [dict(r) for r in get_db().execute(q).fetchall()]
+
+
+def accept_invite(token):
+    db = get_db()
+    db.execute("UPDATE invites SET accepted=1 WHERE token=?", (token,))
+    db.commit()
+
+
+def delete_invite(invite_id):
+    db = get_db()
+    db.execute("DELETE FROM invites WHERE id=?", (invite_id,))
+    db.commit()
 
 
 # ---------- customers / sites (multi-tenant) ----------

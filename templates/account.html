@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="page-title">My account</h1>
+
+<div class="card" id="need-2fa-banner" style="display:none;border-left:3px solid var(--warn);">
+  <b>Two-factor authentication is required.</b> Set it up below to continue using
+  the dashboard.
+</div>
+
+<div class="card">
+  <h2>Account</h2>
+  <div class="stats">
+    <div class="stat"><div class="label">Username</div><div class="value small" id="a-user">…</div></div>
+    <div class="stat"><div class="label">Role</div><div class="value small" id="a-role">…</div></div>
+    <div class="stat"><div class="label">2FA</div><div class="value small" id="a-2fa">…</div></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Change password</h2>
+  <div class="f-row">
+    <div><label class="f-label">Current password</label><input type="password" id="p-cur"></div>
+    <div><label class="f-label">New password</label><input type="password" id="p-new" placeholder="min 6 chars"></div>
+    <div style="display:flex;align-items:flex-end;"><button class="btn primary" id="p-save">Update password</button></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Two-factor authentication (authenticator app)</h2>
+  <p class="card-sub">Use Google Authenticator, Microsoft Authenticator, Authy, or any
+    TOTP app. Adds a 6-digit code to your login.</p>
+
+  <div id="tfa-off">
+    <p class="muted" id="tfa-off-text">2FA is currently <b>off</b> for your account.</p>
+    <button class="btn primary" id="tfa-begin">Set up 2FA</button>
+  </div>
+
+  <div id="tfa-setup" style="display:none;">
+    <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;">
+      <div>
+        <div class="f-help" style="margin-bottom:6px;">1. Scan this with your authenticator app:</div>
+        <div id="qr-box" style="width:200px;height:200px;background:#fff;border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;justify-content:center;">
+          <img id="qr-img" alt="QR code" style="width:100%;height:100%;display:none;">
+          <span class="muted" id="qr-fallback" style="display:none;padding:10px;font-size:12px;text-align:center;">Scan not available — use the manual key →</span>
+        </div>
+      </div>
+      <div style="flex:1;min-width:240px;">
+        <div class="f-help" style="margin-bottom:6px;">Or enter this key manually:</div>
+        <div class="mono" id="tfa-secret" style="font-size:15px;background:var(--surface-2);padding:10px;border-radius:6px;word-break:break-all;letter-spacing:1px;"></div>
+        <div class="f-help" style="margin:12px 0 6px;">2. Enter the 6-digit code it shows:</div>
+        <div style="display:flex;gap:8px;">
+          <input type="text" id="tfa-code" inputmode="numeric" maxlength="6" placeholder="123456" style="width:130px;font-size:18px;letter-spacing:3px;text-align:center;">
+          <button class="btn primary" id="tfa-enable">Enable 2FA</button>
+          <button class="btn" id="tfa-cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="tfa-on" style="display:none;">
+    <p class="muted">2FA is <b class="v-good">enabled</b> on your account.</p>
+    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+      <div><label class="f-label">Confirm password to turn off</label><input type="password" id="tfa-off-pw" style="width:220px;"></div>
+      <button class="btn danger" id="tfa-disable">Turn off 2FA</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  async function load() {
+    const p = await api("/api/profile");
+    document.getElementById("a-user").textContent = p.username;
+    document.getElementById("a-role").textContent = p.role;
+    document.getElementById("a-2fa").innerHTML = p.totp_enabled
+      ? '<span class="v-good">on</span>' : '<span class="muted">off</span>';
+    document.getElementById("tfa-off").style.display = p.totp_enabled ? "none" : "block";
+    document.getElementById("tfa-on").style.display = p.totp_enabled ? "block" : "none";
+    document.getElementById("tfa-setup").style.display = "none";
+    // 2FA-required banner
+    try {
+      const s = await api("/api/settings");
+      if (s.settings.require_2fa && !p.totp_enabled)
+        document.getElementById("need-2fa-banner").style.display = "block";
+    } catch (e) {}
+  }
+
+  document.getElementById("p-save").addEventListener("click", async () => {
+    try {
+      await api("/api/profile/password", { method:"POST", body:JSON.stringify({
+        current: document.getElementById("p-cur").value,
+        new: document.getElementById("p-new").value })});
+      document.getElementById("p-cur").value=""; document.getElementById("p-new").value="";
+      toast("Password updated");
+    } catch(e){ toast(e.message,true); }
+  });
+
+  document.getElementById("tfa-begin").addEventListener("click", async () => {
+    try {
+      const r = await api("/api/profile/2fa/begin", { method:"POST", body:"{}" });
+      document.getElementById("tfa-secret").textContent = r.secret;
+      document.getElementById("tfa-setup").style.display = "block";
+      document.getElementById("tfa-off").style.display = "none";
+      const img = document.getElementById("qr-img"), fb = document.getElementById("qr-fallback");
+      if (r.qr) {
+        img.src = "/api/profile/2fa/qr.svg?t=" + Date.now();
+        img.onload = () => { img.style.display="block"; fb.style.display="none"; };
+        img.onerror = () => { img.style.display="none"; fb.style.display="block"; };
+      } else { img.style.display="none"; fb.style.display="block"; }
+    } catch(e){ toast(e.message,true); }
+  });
+
+  document.getElementById("tfa-cancel").addEventListener("click", load);
+
+  document.getElementById("tfa-enable").addEventListener("click", async () => {
+    try {
+      await api("/api/profile/2fa/enable", { method:"POST", body:JSON.stringify({
+        code: document.getElementById("tfa-code").value })});
+      toast("2FA enabled");
+      document.getElementById("need-2fa-banner").style.display = "none";
+      load();
+    } catch(e){ toast(e.message,true); }
+  });
+
+  document.getElementById("tfa-disable").addEventListener("click", async () => {
+    try {
+      await api("/api/profile/2fa/disable", { method:"POST", body:JSON.stringify({
+        password: document.getElementById("tfa-off-pw").value })});
+      toast("2FA disabled"); load();
+    } catch(e){ toast(e.message,true); }
+  });
+
+  load();
+})();
+</script>
+{% endblock %}

@@ -10,7 +10,7 @@
 #  GitHub inside it, and installs the monitor as a systemd service.
 #
 #  ▶ EDIT THE NEXT LINE once, after you upload this repo to your GitHub:
-GITHUB_REPO="${GITHUB_REPO:-YOUR-GITHUB-USERNAME/ascom-ping-monitor}"
+GITHUB_REPO="${GITHUB_REPO:-thommgoodwill-png/ascom-ping-monitor}"
 BRANCH="${BRANCH:-main}"
 # =============================================================================
 set -euo pipefail

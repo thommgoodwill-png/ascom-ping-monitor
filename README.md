@@ -51,6 +51,17 @@ emails reports and failure alerts through Gmail.
 - **Webhook alerts** — post the same events to **Microsoft Teams, Discord,
   Slack** or a generic JSON endpoint (per-event toggles, test button).
 - Light and dark mode, Ascom branding, login-protected GUI.
+- **User accounts & roles** — multiple users with **admin** or **standard** roles.
+  Admins manage users and access control; standard users get everything else.
+  The built-in local **ascom** admin always remains for local instances.
+- **Two-factor authentication (2FA)** — per-user TOTP via any authenticator app
+  (Google/Microsoft Authenticator, Authy…), with a scannable QR or manual key.
+  Admins can require 2FA for everyone.
+- **Email allow-list** — admins restrict sign-in to matching email addresses,
+  with wildcards (e.g. `*@ascom.com`).
+- **Invites** — email someone an invite link (or copy it manually) to create
+  their own account with a role you choose; invites are single-use and expire.
+  Plus manual account creation on the Users page.
 
 ## Multi-site / MSP mode (customers → sites → agents)
 

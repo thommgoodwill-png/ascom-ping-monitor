@@ -71,6 +71,11 @@ DEFAULTS = {
     "capture_max_seconds": 60,      # UI upper bound for a single capture
     "capture_max_packets": 5000,    # UI upper bound for a single capture
 
+    # -------- access control (admin) --------
+    "allowed_emails": "",           # comma/newline list of allowed email patterns
+                                    # (wildcards, e.g. *@ascom.com). Blank = allow all.
+    "require_2fa": False,           # force every user to set up 2FA before access
+
     # -------- interface --------
     "default_theme": "auto",        # auto | light | dark
     "refresh_seconds": 30,          # dashboard auto-refresh (0 = off)

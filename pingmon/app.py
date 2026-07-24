@@ -114,6 +114,9 @@ def create_app():
                            else url_for("static", filename="branding/" + static_logo))
         ctx["favicon_url"] = (url_for("userfavicon") if _find_favicon()
                               else url_for("static", filename="branding/favicon.svg"))
+        ctx["current_user"] = session.get("username")
+        ctx["current_role"] = session.get("role", "standard")
+        ctx["is_admin"] = session.get("role") == "admin"
         return ctx
 
     from .agentapi import bp as agent_bp
@@ -138,28 +141,99 @@ def login_required(f):
     return wrapper
 
 
+def admin_required(f):
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        if not session.get("authed"):
+            if request.path.startswith("/api/"):
+                return jsonify(error="not authenticated"), 401
+            return redirect(url_for("login", next=request.path))
+        if session.get("role") != "admin":
+            if request.path.startswith("/api/"):
+                return jsonify(error="administrator access required"), 403
+            return redirect(url_for("dashboard"))
+        return f(*args, **kwargs)
+    return wrapper
+
+
 def register_routes(app):
+
+    @app.before_request
+    def _enforce_2fa():
+        """If the admin has required 2FA, push logged-in users who haven't set
+        it up to the account page until they do."""
+        if not session.get("authed") or not settings.get("require_2fa"):
+            return
+        u = database.get_user(session.get("uid"))
+        if not u or u["totp_enabled"]:
+            return
+        p = request.path
+        allow = (p.startswith("/static/") or p.startswith("/api/profile")
+                 or p in ("/account", "/logout", "/userlogo", "/userfavicon"))
+        if allow:
+            return
+        if p.startswith("/api/"):
+            return jsonify(error="2FA setup required", need_2fa=True), 403
+        return redirect(url_for("account_page"))
 
     # ---------------- auth ----------------
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
+        from . import auth
         error = None
+        stage = "password"
         if request.method == "POST":
-            user = request.form.get("username", "")
+            stage = request.form.get("stage", "password")
+            nxt = request.args.get("next") or url_for("dashboard")
+            if not nxt.startswith("/"):
+                nxt = url_for("dashboard")
+
+            if stage == "totp":
+                # second factor: user already passed the password stage
+                uid = session.get("pending_uid")
+                u = database.get_user(uid) if uid else None
+                if u and auth.verify_totp(u.get("totp_secret"),
+                                          request.form.get("code", "")):
+                    session.pop("pending_uid", None)
+                    _complete_login(u)
+                    return redirect(nxt)
+                time.sleep(1.0)
+                error = "Invalid authentication code."
+                return render_template("login.html", error=error, stage="totp",
+                                       theme=settings.get("default_theme"))
+
+            # first factor: username + password
+            username = request.form.get("username", "").strip()
             pw = request.form.get("password", "")
-            if (secrets.compare_digest(user, settings.GUI_USERNAME)
-                    and secrets.compare_digest(pw, settings.GUI_PASSWORD)):
-                session.permanent = True
-                session["authed"] = True
-                target = request.args.get("next") or url_for("dashboard")
-                if not target.startswith("/"):
-                    target = url_for("dashboard")
-                return redirect(target)
-            time.sleep(1.5)   # slow brute force attempts
+            u = database.get_user_by_name(username)
+            if u and not u["disabled"] and auth.verify_password(u["password_hash"], pw):
+                # email allow-list gate (admin-configured)
+                patterns = auth.parse_email_patterns(settings.get("allowed_emails"))
+                if not auth.email_allowed(u.get("email"), patterns):
+                    time.sleep(1.0)
+                    error = ("Access denied: your account email is not on the "
+                             "allowed list. Contact an administrator.")
+                    return render_template("login.html", error=error,
+                                           theme=settings.get("default_theme"))
+                if u["totp_enabled"]:
+                    session["pending_uid"] = u["id"]   # go to 2FA step
+                    return render_template("login.html", error=None, stage="totp",
+                                           theme=settings.get("default_theme"))
+                _complete_login(u)
+                return redirect(nxt)
+            time.sleep(1.5)   # slow brute-force attempts
             error = "Invalid username or password."
-        return render_template("login.html", error=error,
+        return render_template("login.html", error=error, stage=stage,
                                theme=settings.get("default_theme"))
+
+    def _complete_login(u):
+        session.permanent = True
+        session["authed"] = True
+        session["uid"] = u["id"]
+        session["username"] = u["username"]
+        session["role"] = u["role"]
+        database.update_user(u["id"], last_login=time.time())
 
     @app.route("/logout")
     def logout():
@@ -210,6 +284,18 @@ def register_routes(app):
     @login_required
     def settings_page():
         return render_template("settings.html", page="settings",
+                               theme=settings.get("default_theme"))
+
+    @app.route("/users")
+    @admin_required
+    def users_page():
+        return render_template("users.html", page="users",
+                               theme=settings.get("default_theme"))
+
+    @app.route("/account")
+    @login_required
+    def account_page():
+        return render_template("account.html", page="account",
                                theme=settings.get("default_theme"))
 
     # ---------------- customers / sites (hub) ----------------
@@ -775,6 +861,8 @@ def register_routes(app):
                        webhook_last_error=webhooks.last_error,
                        webhook_last_sent=webhooks.last_sent)
 
+    ADMIN_ONLY_SETTINGS = {"allowed_emails", "require_2fa"}
+
     @app.route("/api/settings", methods=["POST"])
     @login_required
     def api_set_settings():
@@ -784,6 +872,10 @@ def register_routes(app):
             data.pop("gmail_app_password")
         if data.get("wh_url") == "********":
             data.pop("wh_url")
+        # admin-only settings can't be changed by standard users
+        if session.get("role") != "admin":
+            for k in ADMIN_ONLY_SETTINGS:
+                data.pop(k, None)
         applied = settings.update(data)
         return jsonify(applied=applied)
 
@@ -795,6 +887,233 @@ def register_routes(app):
             return jsonify(ok=True)
         except Exception as e:
             return jsonify(ok=False, error=f"{type(e).__name__}: {e}"), 400
+
+    # ---------------- users (admin) ----------------
+
+    @app.route("/api/users")
+    @admin_required
+    def api_users():
+        return jsonify(users=database.list_users())
+
+    @app.route("/api/users", methods=["POST"])
+    @admin_required
+    def api_add_user():
+        from . import auth
+        data = request.get_json(force=True) or {}
+        username = (data.get("username") or "").strip()
+        pw = data.get("password") or ""
+        role = "admin" if data.get("role") == "admin" else "standard"
+        email = (data.get("email") or "").strip()
+        if not username or not pw:
+            return jsonify(error="username and password required"), 400
+        if database.get_user_by_name(username):
+            return jsonify(error="that username already exists"), 400
+        if len(pw) < 6:
+            return jsonify(error="password must be at least 6 characters"), 400
+        # enforce the allowed-email list on new accounts
+        patterns = auth.parse_email_patterns(settings.get("allowed_emails"))
+        if email and not auth.email_allowed(email, patterns):
+            return jsonify(error="that email is not on the allowed list"), 400
+        uid = database.add_user(username, auth.hash_password(pw), role, email)
+        return jsonify(id=uid)
+
+    @app.route("/api/users/<int:uid>", methods=["PUT"])
+    @admin_required
+    def api_update_user(uid):
+        from . import auth
+        u = database.get_user(uid)
+        if not u:
+            return jsonify(error="not found"), 404
+        data = request.get_json(force=True) or {}
+        fields = {}
+        if "role" in data:
+            new_role = "admin" if data["role"] == "admin" else "standard"
+            # don't allow removing the last admin
+            if u["role"] == "admin" and new_role != "admin" and database.count_admins(uid) == 0:
+                return jsonify(error="cannot demote the last administrator"), 400
+            fields["role"] = new_role
+        if "email" in data:
+            fields["email"] = (data["email"] or "").strip()
+        if "disabled" in data:
+            dis = 1 if data["disabled"] else 0
+            if dis and u["role"] == "admin" and database.count_admins(uid) == 0:
+                return jsonify(error="cannot disable the last administrator"), 400
+            fields["disabled"] = dis
+        if data.get("password"):
+            if len(data["password"]) < 6:
+                return jsonify(error="password must be at least 6 characters"), 400
+            fields["password_hash"] = auth.hash_password(data["password"])
+        if data.get("reset_2fa"):
+            fields["totp_enabled"] = 0
+            fields["totp_secret"] = None
+        database.update_user(uid, **fields)
+        return jsonify(ok=True)
+
+    @app.route("/api/users/<int:uid>", methods=["DELETE"])
+    @admin_required
+    def api_delete_user(uid):
+        u = database.get_user(uid)
+        if not u:
+            return jsonify(error="not found"), 404
+        if uid == session.get("uid"):
+            return jsonify(error="you cannot delete your own account"), 400
+        if u["role"] == "admin" and database.count_admins(uid) == 0:
+            return jsonify(error="cannot delete the last administrator"), 400
+        database.delete_user(uid)
+        return jsonify(ok=True)
+
+    # ---------------- invites (admin) ----------------
+
+    @app.route("/api/invites")
+    @admin_required
+    def api_invites():
+        return jsonify(invites=database.list_invites(pending_only=True))
+
+    @app.route("/api/invites", methods=["POST"])
+    @admin_required
+    def api_create_invite():
+        from . import auth
+        data = request.get_json(force=True) or {}
+        email = (data.get("email") or "").strip()
+        role = "admin" if data.get("role") == "admin" else "standard"
+        if not email or "@" not in email:
+            return jsonify(error="a valid email is required"), 400
+        # respect the allow-list
+        patterns = auth.parse_email_patterns(settings.get("allowed_emails"))
+        if not auth.email_allowed(email, patterns):
+            return jsonify(error="that email is not on the allowed list"), 400
+        try:
+            days = max(1, min(30, int(data.get("expires_days", 7))))
+        except (TypeError, ValueError):
+            days = 7
+        token = secrets.token_urlsafe(24)
+        expires = time.time() + days * 86400
+        database.add_invite(token, email, role, expires, session.get("username"))
+        # build the link from the request host (works over http or https)
+        base = request.host_url.rstrip("/")
+        link = f"{base}/invite/{token}"
+        emailed, email_error = False, None
+        if settings.get("email_enabled"):
+            try:
+                emailer.send_invite(email, link, role, session.get("username"), days * 24)
+                emailed = True
+            except Exception as e:
+                email_error = f"{type(e).__name__}: {e}"
+        return jsonify(ok=True, link=link, emailed=emailed, email_error=email_error)
+
+    @app.route("/api/invites/<int:iid>", methods=["DELETE"])
+    @admin_required
+    def api_delete_invite(iid):
+        database.delete_invite(iid)
+        return jsonify(ok=True)
+
+    # ---------------- invite acceptance (public) ----------------
+
+    @app.route("/invite/<token>", methods=["GET"])
+    def invite_accept_page(token):
+        inv = database.get_invite(token)
+        valid = bool(inv and not inv["accepted"] and inv["expires_at"] > time.time())
+        return render_template("invite.html", token=token, valid=valid,
+                               email=(inv["email"] if inv else ""),
+                               role=(inv["role"] if inv else ""),
+                               theme=settings.get("default_theme"))
+
+    @app.route("/api/invite/<token>", methods=["POST"])
+    def api_accept_invite(token):
+        from . import auth
+        inv = database.get_invite(token)
+        if not inv or inv["accepted"] or inv["expires_at"] <= time.time():
+            return jsonify(error="this invite is invalid or has expired"), 400
+        data = request.get_json(force=True) or {}
+        username = (data.get("username") or "").strip()
+        pw = data.get("password") or ""
+        if not username or not pw:
+            return jsonify(error="username and password required"), 400
+        if len(pw) < 6:
+            return jsonify(error="password must be at least 6 characters"), 400
+        if database.get_user_by_name(username):
+            return jsonify(error="that username is already taken"), 400
+        # re-check the allow-list at acceptance time
+        patterns = auth.parse_email_patterns(settings.get("allowed_emails"))
+        if not auth.email_allowed(inv["email"], patterns):
+            return jsonify(error="the invited email is no longer permitted"), 400
+        database.add_user(username, auth.hash_password(pw), inv["role"], inv["email"])
+        database.accept_invite(token)
+        return jsonify(ok=True)
+
+    # ---------------- own profile / 2FA (any logged-in user) ----------------
+
+    @app.route("/api/profile")
+    @login_required
+    def api_profile():
+        u = database.get_user(session.get("uid"))
+        if not u:
+            return jsonify(error="not found"), 404
+        return jsonify(username=u["username"], role=u["role"], email=u["email"],
+                       totp_enabled=bool(u["totp_enabled"]))
+
+    @app.route("/api/profile/password", methods=["POST"])
+    @login_required
+    def api_change_password():
+        from . import auth
+        u = database.get_user(session.get("uid"))
+        data = request.get_json(force=True) or {}
+        if not u or not auth.verify_password(u["password_hash"], data.get("current", "")):
+            return jsonify(error="current password is incorrect"), 400
+        new = data.get("new") or ""
+        if len(new) < 6:
+            return jsonify(error="new password must be at least 6 characters"), 400
+        database.update_user(u["id"], password_hash=auth.hash_password(new))
+        return jsonify(ok=True)
+
+    @app.route("/api/profile/2fa/begin", methods=["POST"])
+    @login_required
+    def api_2fa_begin():
+        from . import auth
+        u = database.get_user(session.get("uid"))
+        secret = auth.new_totp_secret()
+        session["pending_totp_secret"] = secret       # not saved until verified
+        uri = auth.otpauth_uri(secret, u["username"])
+        return jsonify(secret=secret, uri=uri, qr=_qr_available())
+
+    @app.route("/api/profile/2fa/qr.svg")
+    @login_required
+    def api_2fa_qr():
+        secret = session.get("pending_totp_secret")
+        if not secret:
+            return "no pending setup", 404
+        u = database.get_user(session.get("uid"))
+        from . import auth
+        uri = auth.otpauth_uri(secret, u["username"])
+        svg = _make_qr_svg(uri)
+        if svg is None:
+            return "qr unavailable", 404
+        return app.response_class(svg, mimetype="image/svg+xml")
+
+    @app.route("/api/profile/2fa/enable", methods=["POST"])
+    @login_required
+    def api_2fa_enable():
+        from . import auth
+        secret = session.get("pending_totp_secret")
+        code = (request.get_json(force=True) or {}).get("code", "")
+        if not secret:
+            return jsonify(error="start 2FA setup first"), 400
+        if not auth.verify_totp(secret, code):
+            return jsonify(error="that code is incorrect — try again"), 400
+        database.update_user(session["uid"], totp_secret=secret, totp_enabled=1)
+        session.pop("pending_totp_secret", None)
+        return jsonify(ok=True)
+
+    @app.route("/api/profile/2fa/disable", methods=["POST"])
+    @login_required
+    def api_2fa_disable():
+        from . import auth
+        u = database.get_user(session.get("uid"))
+        data = request.get_json(force=True) or {}
+        if not auth.verify_password(u["password_hash"], data.get("password", "")):
+            return jsonify(error="password incorrect"), 400
+        database.update_user(u["id"], totp_enabled=0, totp_secret=None)
+        return jsonify(ok=True)
 
     # ---------------- agent mode (customer-side probe) ----------------
 
@@ -860,6 +1179,29 @@ def register_routes(app):
         start = end - REPORT_KINDS[kind] * 3600
         queued = emailer.send_report(kind, start, end, force=True)
         return jsonify(ok=True, queued=queued)
+
+
+def _qr_available():
+    try:
+        import qrcode  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _make_qr_svg(data):
+    """Render a QR as an SVG string, or None if the qrcode lib is unavailable."""
+    try:
+        import qrcode
+        import qrcode.image.svg
+        img = qrcode.make(data, image_factory=qrcode.image.svg.SvgPathImage,
+                          box_size=10, border=2)
+        import io
+        buf = io.BytesIO()
+        img.save(buf)
+        return buf.getvalue().decode("utf-8")
+    except Exception:
+        return None
 
 
 def _parse_interval(value):

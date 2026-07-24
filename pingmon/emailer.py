@@ -99,11 +99,14 @@ class Emailer:
                 self.last_error = f"{type(e).__name__}: {e}"
                 log.error("email failed (%s): %s", subject, e)
 
-    def _smtp_send(self, subject, html_body):
+    def _smtp_send(self, subject, html_body, override_recipients=None):
         user = settings.get("gmail_user").strip()
         password = settings.get("gmail_app_password").strip()
-        recipients = [r.strip() for r in settings.get("email_recipients").split(",")
-                      if r.strip()]
+        if override_recipients is not None:
+            recipients = [r.strip() for r in override_recipients if r.strip()]
+        else:
+            recipients = [r.strip() for r in settings.get("email_recipients").split(",")
+                          if r.strip()]
         if not (user and password and recipients):
             raise RuntimeError("Gmail account / app password / recipients not configured")
         msg = MIMEMultipart("alternative")
@@ -221,6 +224,24 @@ class Emailer:
           </div>""")
         self._enqueue(f"[Ascom Network Monitor] New device: {dev['ip']} "
                       f"({dev['mac']})", body)
+
+    def send_invite(self, email, link, role, inviter, expires_h):
+        """Send an account-invite email. Synchronous so the GUI reports the
+        real result (the admin needs to know if it actually sent)."""
+        body = _shell(f"""
+          <p>You've been invited to the <b>Ascom Network Monitor</b>
+             {'as an administrator' if role == 'admin' else ''} by
+             {html.escape(inviter or 'an administrator')}.</p>
+          <p>Click the button below to create your account. This invite expires in
+             about {expires_h} hours.</p>
+          <p style="margin:20px 0;">
+            <a href="{html.escape(link)}" style="background:{ASCOM_RED};color:#fff;
+               text-decoration:none;padding:11px 22px;border-radius:7px;font-weight:700;
+               display:inline-block;">Create your account</a></p>
+          <p style="font-size:12px;color:#777;">Or paste this link into your browser:<br>
+             {html.escape(link)}</p>""", title="You're invited")
+        self._smtp_send(f"[Ascom Network Monitor] You're invited to create an account",
+                        body, override_recipients=[email])
 
     def send_test(self):
         body = _shell("""<p>This is a test email from your Ascom Network Monitor.

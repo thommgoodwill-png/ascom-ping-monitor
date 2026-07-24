@@ -30,6 +30,7 @@
     <a href="/capture" class="{{ 'active' if page == 'capture' }}">Capture</a>
     <a href="/tools" class="{{ 'active' if page == 'tools' }}">Tools</a>
     <a href="/settings" class="{{ 'active' if page == 'settings' }}">Settings</a>
+    {% if is_admin %}<a href="/users" class="{{ 'active' if page == 'users' }}">Users</a>{% endif %}
   </nav>
   <span class="spacer"></span>
   <div class="top-actions">
@@ -38,6 +39,7 @@
     </span>
     <a class="icon-btn" href="/wallboard" title="Wallboard mode (full-screen status)">▦</a>
     <button class="icon-btn" id="theme-btn" title="Toggle light / dark mode">☾</button>
+    <a class="btn small" href="/account" title="Account &amp; 2FA">{{ current_user or 'Account' }}{% if is_admin %} · admin{% endif %}</a>
     <a class="btn small" href="/logout">Log out</a>
     {% if is_desktop %}
     <button class="btn small danger" id="quit-btn" title="Stop the Network Monitor app">⏻ Quit</button>

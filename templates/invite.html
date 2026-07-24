@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Create your account — Ascom Network Monitor</title>
+<link rel="icon" href="{{ favicon_url }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script>
+  (function () {
+    var t = localStorage.getItem("pingmon-theme") || "{{ theme }}";
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-card" style="width:400px;">
+    <img src="{{ logo_url }}" alt="ascom">
+    <div class="sub">Network Monitor — create your account</div>
+
+    {% if not valid %}
+      <div class="login-error">This invite link is invalid or has expired. Ask your
+        administrator to send a new one.</div>
+      <a class="btn" style="width:100%;justify-content:center;" href="/login">Go to sign in</a>
+    {% else %}
+      <p style="font-size:13px;color:var(--muted);margin:0 0 16px;">
+        You've been invited as a <b>{{ 'administrator' if role == 'admin' else 'standard user' }}</b>
+        for <b>{{ email }}</b>. Pick a username and password.</p>
+      <div id="err" class="login-error" style="display:none;"></div>
+      <div style="margin-bottom:14px;">
+        <label class="f-label" for="username">Username</label>
+        <input type="text" id="username" autofocus>
+      </div>
+      <div style="margin-bottom:14px;">
+        <label class="f-label" for="password">Password</label>
+        <input type="password" id="password" placeholder="min 6 characters">
+      </div>
+      <div style="margin-bottom:20px;">
+        <label class="f-label" for="password2">Confirm password</label>
+        <input type="password" id="password2">
+      </div>
+      <button class="btn primary" id="create" style="width:100%;justify-content:center;">Create account</button>
+      <div id="done" style="display:none;text-align:center;margin-top:14px;">
+        <p class="v-good" style="font-weight:600;">✓ Account created.</p>
+        <a class="btn primary" style="width:100%;justify-content:center;" href="/login">Sign in</a>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% if valid %}
+<script>
+(function () {
+  const TOKEN = "{{ token }}";
+  function showErr(m){ const e=document.getElementById("err"); e.textContent=m; e.style.display="block"; }
+  document.getElementById("create").addEventListener("click", async () => {
+    const u=document.getElementById("username").value.trim();
+    const p=document.getElementById("password").value;
+    const p2=document.getElementById("password2").value;
+    if(!u||!p){ showErr("Username and password are required."); return; }
+    if(p!==p2){ showErr("Passwords don't match."); return; }
+    if(p.length<6){ showErr("Password must be at least 6 characters."); return; }
+    try {
+      const res = await fetch("/api/invite/"+encodeURIComponent(TOKEN), {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({username:u, password:p}) });
+      const d = await res.json();
+      if(!res.ok) throw new Error(d.error||res.statusText);
+      document.getElementById("create").style.display="none";
+      document.querySelectorAll("#username,#password,#password2").forEach(x=>x.disabled=true);
+      document.getElementById("done").style.display="block";
+    } catch(e){ showErr(e.message); }
+  });
+})();
+</script>
+{% endif %}
+</body>
+</html>

@@ -111,12 +111,22 @@
     const plotH = L.h - L.top - L.bottom;
     if (plotW < 30 || plotH < 30) return;
 
-    // y scale: at least a bit above crit so threshold lines always visible
+    // y scale: auto-scale to the actual latency so low pings aren't squashed.
+    // Uses the max plotted value (avg or max column) with headroom. A threshold
+    // guide line is included only when the data is near it (within 30%), so a
+    // healthy graph zooms right in but you still see the warning line as you
+    // approach it. Threshold lines above the axis auto-hide (drawn further down).
     let dataMax = 0;
     for (const s of o.series) {
-      for (const p of s.data) if (p[2] != null && p[2] > dataMax) dataMax = p[2];
+      for (const p of s.data) {
+        if (p[2] != null && p[2] > dataMax) dataMax = p[2];  // max column
+        if (p[1] != null && p[1] > dataMax) dataMax = p[1];  // avg column
+      }
     }
-    const yMax = Math.max(dataMax * 1.15, o.crit * 1.25, 10);
+    let yMax = Math.max(dataMax * 1.15, 5);
+    // pull the warn line into view once data climbs past ~70% of it
+    if (dataMax >= o.warn * 0.7 && o.warn > yMax) yMax = o.warn * 1.1;
+    if (dataMax >= o.crit * 0.7 && o.crit > yMax) yMax = o.crit * 1.1;
     const ticks = niceTicks(yMax, 4);
     const yTop = ticks[ticks.length - 1] * 1.02;
     const X = ts => L.left + ((ts - o.start) / (o.end - o.start)) * plotW;

@@ -9,7 +9,7 @@ SERVICE="ascom-ping-monitor"
 PORT="${PINGMON_PORT:-8080}"
 # Used only when this script is run on its own (e.g. via wget one-liner) and
 # the application files are not sitting next to it:
-GITHUB_REPO="${GITHUB_REPO:-YOUR-GITHUB-USERNAME/ascom-ping-monitor}"
+GITHUB_REPO="${GITHUB_REPO:-thommgoodwill-png/ascom-ping-monitor}"
 BRANCH="${BRANCH:-main}"
 
 if [[ $EUID -ne 0 ]]; then
