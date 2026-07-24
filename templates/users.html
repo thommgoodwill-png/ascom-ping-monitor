@@ -29,12 +29,12 @@
 
 <div class="card">
   <h2>Create a user manually</h2>
-  <p class="card-sub">Standard users can use everything except User management and the
+  <p class="card-sub">The email address is used as the username — the person signs in
+    with it. Standard users can use everything except User management and the
     access-control settings. Admins can do everything. Passwords must be strong:
     at least 10 characters with upper &amp; lowercase, a number and a symbol.</p>
   <div class="f-row">
-    <div><label class="f-label">Username</label><input type="text" id="u-name" placeholder="jsmith"></div>
-    <div><label class="f-label">Email</label><input type="email" id="u-email" placeholder="jsmith@ascom.com"></div>
+    <div><label class="f-label">Email (used as username)</label><input type="email" id="u-email" placeholder="jsmith@ascom.com"></div>
     <div><label class="f-label">Password</label><input type="password" id="u-pass" placeholder="strong password"></div>
     <div><label class="f-label">Role</label>
       <select id="u-role"><option value="standard">Standard</option><option value="admin">Admin</option></select>
@@ -153,15 +153,14 @@
 
   document.getElementById("u-add").addEventListener("click", async () => {
     const body = {
-      username: document.getElementById("u-name").value.trim(),
       email: document.getElementById("u-email").value.trim(),
       password: document.getElementById("u-pass").value,
       role: document.getElementById("u-role").value,
     };
-    if (!body.username || !body.password) { toast("Username and password required", true); return; }
+    if (!body.email || !body.password) { toast("Email and password required", true); return; }
     try {
       await api("/api/users", { method:"POST", body:JSON.stringify(body) });
-      ["u-name","u-email","u-pass"].forEach(id=>document.getElementById(id).value="");
+      ["u-email","u-pass"].forEach(id=>document.getElementById(id).value="");
       toast("User added"); load();
     } catch(e){ toast(e.message,true); }
   });

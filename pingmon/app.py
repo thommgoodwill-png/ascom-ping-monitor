@@ -170,6 +170,12 @@ def register_routes(app):
         p = request.path
         allow = (p.startswith("/static/") or p.startswith("/api/profile")
                  or p in ("/account", "/logout", "/userlogo", "/userfavicon"))
+        # Escape hatch: an admin must never be able to lock themselves out with
+        # their own "require 2FA" setting. Always let admins reach Settings (and
+        # the Users page) so they can turn the requirement back off.
+        if u.get("role") == "admin":
+            allow = allow or (p in ("/settings", "/users", "/api/settings")
+                              or p.startswith("/api/users"))
         if allow:
             return
         if p.startswith("/api/"):
@@ -900,14 +906,16 @@ def register_routes(app):
     def api_add_user():
         from . import auth
         data = request.get_json(force=True) or {}
-        username = (data.get("username") or "").strip()
         pw = data.get("password") or ""
         role = "admin" if data.get("role") == "admin" else "standard"
         email = (data.get("email") or "").strip()
-        if not username or not pw:
-            return jsonify(error="username and password required"), 400
+        # The email IS the username (matches the invite flow). No separate
+        # username to choose.
+        username = email
+        if not email or not pw:
+            return jsonify(error="email and password required"), 400
         if database.get_user_by_name(username):
-            return jsonify(error="that username already exists"), 400
+            return jsonify(error="a user with that email already exists"), 400
         pwerr = auth.password_strength_error(pw)
         if pwerr:
             return jsonify(error=pwerr), 400
