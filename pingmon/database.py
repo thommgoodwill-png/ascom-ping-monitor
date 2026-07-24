@@ -109,6 +109,7 @@ def init_db():
         last_seen REAL,
         agent_version TEXT,
         agent_host TEXT)""")
+    _ensure_column(db, "sites", "agent_diag", "agent_diag TEXT")  # agent self-report (JSON)
     # ---- users / roles / 2FA ----
     db.execute("""CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -566,7 +567,8 @@ def add_site(customer_id, name, api_key, notes=""):
 
 
 def update_site(site_id, **fields):
-    allowed = {"name", "notes", "api_key", "last_seen", "agent_version", "agent_host"}
+    allowed = {"name", "notes", "api_key", "last_seen", "agent_version",
+               "agent_host", "agent_diag"}
     sets, vals = [], []
     for k, v in fields.items():
         if k in allowed:
@@ -588,6 +590,13 @@ def delete_site(site_id):
     db.execute("DELETE FROM devices WHERE site_id=?", (site_id,))
     db.execute("DELETE FROM sites WHERE id=?", (site_id,))
     db.commit()
+
+
+def max_ping_id():
+    """Highest ping row id in the local DB (0 if none). Used by the agent to
+    detect a stale push watermark after the local ping table was reset."""
+    r = get_db().execute("SELECT MAX(id) AS m FROM pings").fetchone()
+    return (r["m"] if r and r["m"] is not None else 0)
 
 
 def record_pushed_pings(device_id, samples):
@@ -632,12 +641,14 @@ def max_event_id():
     return r["m"]
 
 
-def touch_site(site_id, agent_version=None, agent_host=None):
+def touch_site(site_id, agent_version=None, agent_host=None, agent_diag=None):
     fields = {"last_seen": time.time()}
     if agent_version:
         fields["agent_version"] = agent_version
     if agent_host:
         fields["agent_host"] = agent_host
+    if agent_diag is not None:
+        fields["agent_diag"] = agent_diag
     update_site(site_id, **fields)
 
 

@@ -17,7 +17,7 @@ from . import database, settings
 
 log = logging.getLogger("pingmon.agent")
 
-AGENT_VERSION = "1.1"   # 1.1 = agent registers its local devices up to the hub
+AGENT_VERSION = "1.2"   # 1.2 = watermark self-heal + self-report diagnostics
 CONF_PATH = os.path.join(database.DATA_DIR, "agent.json")
 STATE_PATH = os.path.join(database.DATA_DIR, "agent_state.json")
 
@@ -203,17 +203,58 @@ class Agent:
                     k: v for k, v in fields.items()
                     if k in ("warn_override", "crit_override", "tcp_ports", "check_url")})
 
+    def _build_diag(self, st):
+        """A small self-report the hub can display, so a remote agent can be
+        diagnosed without opening its dashboard. Never raises."""
+        try:
+            devs = database.list_devices()
+            reg = [d for d in devs if d.get("hub_id")]
+            sample = []
+            for d in reg[:12]:
+                lp = database.last_ping(d["id"]) or {}
+                sample.append({
+                    "host": d["host"], "hub_id": d.get("hub_id"),
+                    "up": bool(lp.get("success")) if lp else None,
+                    "last_latency": lp.get("latency") if lp else None,
+                    "age": round(time.time() - lp["ts"], 1) if lp.get("ts") else None,
+                })
+            return {
+                "local_devices": len(devs),
+                "registered": len(reg),
+                "max_ping_id": database.max_ping_id(),
+                "ping_wm": st.get("ping_wm", 0),
+                "monitoring": bool(settings.get("monitoring_enabled")),
+                "last_error": self.last_error,
+                "sample": sample,
+            }
+        except Exception as e:
+            return {"diag_error": f"{type(e).__name__}: {e}"}
+
     def _push(self, c):
         st = _load_state()
         # map local device id -> hub_id for agent-managed devices
         id_map = {d["id"]: d["hub_id"] for d in database.list_devices()
                   if d.get("hub_id")}
+        diag = self._build_diag(st)
         if not id_map:
+            # nothing registered yet — heartbeat so the hub still sees us + diag
+            _post(f"{c['hub_url']}/agent/v1/heartbeat", c["site_key"],
+                  {"version": AGENT_VERSION, "host": self._hostname(), "diag": diag})
             return
 
-        pings = database.pings_after(st.get("ping_wm", 0), limit=5000)
+        # Self-heal a stale watermark: if it's ahead of the highest local ping
+        # id, the local ping table was reset behind us — rewind so we resume
+        # pushing instead of silently sending nothing forever.
+        wm = st.get("ping_wm", 0)
+        max_id = database.max_ping_id()
+        if wm > max_id:
+            log.warning("agent: ping watermark %s ahead of max id %s — resetting",
+                        wm, max_id)
+            wm = 0
+
+        pings = database.pings_after(wm, limit=5000)
         by_hub = {}
-        max_pid = st.get("ping_wm", 0)
+        max_pid = wm
         for p in pings:
             max_pid = max(max_pid, p["id"])
             hub_id = id_map.get(p["device_id"])
@@ -237,13 +278,14 @@ class Agent:
                 if d.get("hub_id") and d.get("mac")}
 
         if not by_hub and not ev_out:
-            # nothing new — still heartbeat so the hub shows us online
+            # nothing new — still heartbeat (with diag) so the hub shows us online
             _post(f"{c['hub_url']}/agent/v1/heartbeat", c["site_key"],
-                  {"version": AGENT_VERSION, "host": self._hostname()})
+                  {"version": AGENT_VERSION, "host": self._hostname(), "diag": diag})
             return
 
         payload = {"version": AGENT_VERSION, "host": self._hostname(),
-                   "pings": by_hub, "events": ev_out, "macs": macs}
+                   "now": time.time(),
+                   "pings": by_hub, "events": ev_out, "macs": macs, "diag": diag}
         resp = _post(f"{c['hub_url']}/agent/v1/report", c["site_key"], payload)
         st["ping_wm"] = max_pid
         st["event_wm"] = max_eid

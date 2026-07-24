@@ -11,6 +11,7 @@ the hub is internet-reachable — the API key is a bearer secret.
 """
 import functools
 import logging
+import time
 
 from flask import Blueprint, jsonify, request
 
@@ -139,6 +140,33 @@ def report(site):
     # set of device ids that legitimately belong to this site
     own = {d["id"]: d for d in database.list_devices(site_id=site["id"])}
 
+    # --- clock-skew correction -------------------------------------------
+    # If a remote agent's system clock is badly wrong, every ping it stamps
+    # lands hours/days off and the graphs look empty even though the devices
+    # are up. Detect a gross offset and shift this batch onto the hub's clock.
+    # Prefer the agent's reported "now"; otherwise infer it from the newest
+    # sample in the batch. Only correct large offsets so normal small clock
+    # differences (and short buffering) are left untouched.
+    server_now = time.time()
+    offset = 0.0
+    agent_now = data.get("now")
+    try:
+        if agent_now:
+            offset = server_now - float(agent_now)
+    except (TypeError, ValueError):
+        offset = 0.0
+    if not offset:
+        newest = 0.0
+        for samples in (data.get("pings") or {}).values():
+            if isinstance(samples, list):
+                for s in samples:
+                    if isinstance(s, list) and s and isinstance(s[0], (int, float)):
+                        newest = max(newest, s[0])
+        if newest:
+            offset = server_now - newest
+    if abs(offset) < 3600:          # < 1h: normal, don't touch timestamps
+        offset = 0.0
+
     accepted = 0
     for did_str, samples in (data.get("pings") or {}).items():
         try:
@@ -148,6 +176,8 @@ def report(site):
         if did not in own or not isinstance(samples, list):
             continue
         clean = [s for s in samples if isinstance(s, list) and len(s) >= 3][:5000]
+        if offset:
+            clean = [[s[0] + offset] + list(s[1:]) for s in clean]
         database.record_pushed_pings(did, clean)
         accepted += len(clean)
 
@@ -158,7 +188,7 @@ def report(site):
             continue
         if did not in own:
             continue
-        database.record_event(did, float(ev.get("ts", 0)),
+        database.record_event(did, float(ev.get("ts", 0)) + offset,
                               str(ev.get("type", "info"))[:32],
                               str(ev.get("detail", ""))[:500])
 
@@ -168,19 +198,22 @@ def report(site):
         except (TypeError, ValueError):
             continue
         if did in own and mac:
-            import time
             database.set_device_mac(did, str(mac)[:32], time.time())
 
+    import json as _json
     database.touch_site(site["id"],
                         agent_version=data.get("version"),
-                        agent_host=data.get("host"))
+                        agent_host=data.get("host"),
+                        agent_diag=_json.dumps(data.get("diag")) if data.get("diag") else None)
     return jsonify(ok=True, accepted_pings=accepted)
 
 
 @bp.route("/heartbeat", methods=["POST"])
 @site_auth
 def heartbeat(site):
+    import json as _json
     data = request.get_json(force=True, silent=True) or {}
     database.touch_site(site["id"], agent_version=data.get("version"),
-                        agent_host=data.get("host"))
+                        agent_host=data.get("host"),
+                        agent_diag=_json.dumps(data.get("diag")) if data.get("diag") else None)
     return jsonify(ok=True)
