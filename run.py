@@ -1,75 +1,98 @@
-#!/usr/bin/env python3
-"""Ascom Network Monitor entry point (production server via waitress)."""
-import logging
-import os
-import sys
-import threading
-import webbrowser
+#!/usr/bin/env bash
+# Ascom Network Monitor — installer for a Debian/Ubuntu Proxmox LXC container.
+# Run as root inside the container:  bash install.sh
+set -euo pipefail
 
-_FROZEN = getattr(sys, "frozen", False)   # running as a PyInstaller exe
+APP_DIR="/opt/ascom-ping-monitor"
+DATA_DIR="/var/lib/ascom-ping-monitor"
+SERVICE="ascom-ping-monitor"
+PORT="${PINGMON_PORT:-8080}"
+# Used only when this script is run on its own (e.g. via wget one-liner) and
+# the application files are not sitting next to it:
+GITHUB_REPO="${GITHUB_REPO:-YOUR-GITHUB-USERNAME/ascom-ping-monitor}"
+BRANCH="${BRANCH:-main}"
 
-handlers = [logging.StreamHandler()]
-if _FROZEN:
-    # windowed exe has no console — keep a log file next to the data
-    from pingmon import database
-    os.makedirs(database.DATA_DIR, exist_ok=True)
-    handlers.append(logging.FileHandler(
-        os.path.join(database.DATA_DIR, "pingmon.log"), encoding="utf-8"))
+if [[ $EUID -ne 0 ]]; then
+  echo "Please run as root (inside the LXC container)." >&2
+  exit 1
+fi
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-                    handlers=handlers)
+echo "==> Installing OS packages (python3, venv, iputils-ping, traceroute)…"
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq python3 python3-venv python3-pip iputils-ping traceroute \
+  mtr-tiny tcpdump snmp iperf3 curl ca-certificates tar >/dev/null
 
-from pingmon.app import create_app  # noqa: E402
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo /tmp)"
+if [[ ! -d "$SRC_DIR/pingmon" ]]; then
+  # standalone mode: fetch the application from GitHub
+  if [[ "$GITHUB_REPO" == YOUR-GITHUB-USERNAME/* ]]; then
+    echo "ERROR: application files not found next to install.sh and GITHUB_REPO" >&2
+    echo "       is still the placeholder. Edit the GITHUB_REPO line in install.sh," >&2
+    echo "       or run:  GITHUB_REPO=youruser/ascom-ping-monitor bash install.sh" >&2
+    exit 1
+  fi
+  echo "==> Downloading application from github.com/${GITHUB_REPO} (${BRANCH})…"
+  SRC_DIR="/tmp/pingmon-src"
+  rm -rf "$SRC_DIR" && mkdir -p "$SRC_DIR"
+  curl -fsSL "https://codeload.github.com/${GITHUB_REPO}/tar.gz/refs/heads/${BRANCH}" \
+    | tar xz -C "$SRC_DIR" --strip-components=1
+fi
 
-app = create_app()
+echo "==> Copying application to ${APP_DIR}…"
+mkdir -p "$APP_DIR" "$DATA_DIR"
+# clean out old app code so deleted/renamed files don't linger between updates
+# (never touches $DATA_DIR, where settings and ping history live)
+rm -rf "$APP_DIR/pingmon" "$APP_DIR/templates" "$APP_DIR/static"
+cp -r "$SRC_DIR/pingmon" "$SRC_DIR/templates" "$SRC_DIR/static" \
+      "$SRC_DIR/run.py" "$SRC_DIR/requirements.txt" "$APP_DIR/"
 
+echo "==> Creating Python virtual environment…"
+python3 -m venv "$APP_DIR/venv"
+"$APP_DIR/venv/bin/pip" install --quiet --upgrade pip
+"$APP_DIR/venv/bin/pip" install --quiet -r "$APP_DIR/requirements.txt"
 
-def _tray_icon(port):
-    """Optional Windows system-tray icon with Open / Quit. Needs pystray+Pillow;
-    silently skipped if unavailable (the GUI Quit button still works)."""
-    try:
-        import pystray
-        from PIL import Image, ImageDraw
-    except Exception:
-        return
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle([2, 2, 62, 62], radius=12, fill=(218, 41, 28, 255))
-    try:
-        from PIL import ImageFont
-        f = ImageFont.truetype("arialbd.ttf", 46)
-    except Exception:
-        f = None
-    d.text((18, 4), "a", fill=(255, 255, 255, 255), font=f)
+echo "==> Allowing unprivileged ICMP ping (needed in unprivileged LXC)…"
+if ! ping -c1 -W1 127.0.0.1 >/dev/null 2>&1; then
+  sysctl -w net.ipv4.ping_group_range="0 2147483647" >/dev/null 2>&1 || true
+  echo 'net.ipv4.ping_group_range = 0 2147483647' > /etc/sysctl.d/99-pingmon.conf 2>/dev/null || true
+fi
 
-    def _open(icon, item):
-        webbrowser.open(f"http://127.0.0.1:{port}")
+echo "==> Installing systemd service…"
+cat > /etc/systemd/system/${SERVICE}.service <<EOF
+[Unit]
+Description=Ascom Network Monitor
+After=network-online.target
+Wants=network-online.target
 
-    def _quit(icon, item):
-        icon.stop()
-        os._exit(0)
+[Service]
+Type=simple
+Environment=PINGMON_DATA=${DATA_DIR}
+Environment=PINGMON_PORT=${PORT}
+WorkingDirectory=${APP_DIR}
+ExecStart=${APP_DIR}/venv/bin/python ${APP_DIR}/run.py
+Restart=always
+RestartSec=5
 
-    menu = pystray.Menu(
-        pystray.MenuItem("Open Network Monitor", _open, default=True),
-        pystray.MenuItem("Quit", _quit))
-    icon = pystray.Icon("AscomNetworkMonitor", img, "Ascom Network Monitor", menu)
-    threading.Thread(target=icon.run, daemon=True, name="tray").start()
+[Install]
+WantedBy=multi-user.target
+EOF
 
+systemctl daemon-reload
+systemctl enable ${SERVICE}
+systemctl restart ${SERVICE}   # starts fresh installs, restarts updates
 
-if __name__ == "__main__":
-    host = os.environ.get("PINGMON_HOST", "0.0.0.0")
-    port = int(os.environ.get("PINGMON_PORT", "8080"))
-    if _FROZEN:
-        _tray_icon(port)
-        if os.environ.get("PINGMON_NO_BROWSER") != "1":
-            threading.Timer(1.5, lambda: webbrowser.open(
-                f"http://127.0.0.1:{port}")).start()
-    try:
-        from waitress import serve
-        logging.getLogger("pingmon").info("listening on http://%s:%s", host, port)
-        serve(app, host=host, port=port, threads=8)
-    except ImportError:
-        logging.getLogger("pingmon").warning(
-            "waitress not installed - falling back to Flask dev server")
-        app.run(host=host, port=port)
+sleep 2
+IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+echo
+echo "=============================================================="
+echo "  Ascom Network Monitor is installed and running."
+echo
+echo "  Web GUI:   http://${IP:-<container-ip>}:${PORT}"
+echo "  Username:  ascom"
+echo "  Password:  ascom!12345"
+echo
+echo "  Service:   systemctl status ${SERVICE}"
+echo "  Logs:      journalctl -u ${SERVICE} -f"
+echo "  Data:      ${DATA_DIR}"
+echo "=============================================================="
