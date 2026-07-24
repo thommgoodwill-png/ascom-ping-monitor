@@ -88,6 +88,9 @@ def init_db():
     _ensure_column(db, "devices", "check_url", "check_url TEXT")
     _ensure_column(db, "devices", "site_id", "site_id INTEGER")  # NULL = hub-local
     _ensure_column(db, "devices", "hub_id", "hub_id INTEGER")    # agent: mirrors hub device
+    # agent: 1 = this device was pulled DOWN from the hub (a mirror); 0/NULL =
+    # added locally on the agent and pushed UP to the hub.
+    _ensure_column(db, "devices", "from_hub", "from_hub INTEGER DEFAULT 0")
     db.execute("""CREATE TABLE IF NOT EXISTS known_devices (
         mac TEXT PRIMARY KEY,
         ip TEXT, vendor TEXT, name TEXT,
@@ -183,7 +186,7 @@ def add_device(name, host, enabled=1, interval_override=None, site_id=None):
 def update_device(dev_id, **fields):
     allowed = {"name", "host", "enabled", "interval_override", "sort",
                "warn_override", "crit_override", "tcp_ports", "check_url",
-               "site_id", "hub_id"}
+               "site_id", "hub_id", "from_hub"}
     sets, vals = [], []
     for k, v in fields.items():
         if k in allowed:
