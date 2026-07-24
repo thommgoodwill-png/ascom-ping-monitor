@@ -126,8 +126,9 @@ class Agent:
                 self._stop.wait(5)
                 continue
             try:
-                self._sync_config(c)
-                self._push(c)
+                self._register_local(c)   # push agent-added devices UP to the hub
+                self._sync_config(c)      # pull any hub-defined devices DOWN
+                self._push(c)             # push ping samples + events
                 self.last_error = None
             except Exception as e:
                 self.last_error = f"{type(e).__name__}: {e}"
@@ -140,16 +141,43 @@ class Agent:
         except OSError:
             return ""
 
+    def _register_local(self, c):
+        """Push devices added locally on this agent UP to the hub, so they show
+        up in the controller under this site. Any device without a hub_id is a
+        locally-added one that hasn't been registered yet; we send it, get back
+        the hub's id for it, and tag it so its pings push to the right place."""
+        unregistered = [d for d in database.list_devices() if not d.get("hub_id")]
+        if not unregistered:
+            return
+        payload = {
+            "version": AGENT_VERSION, "host": self._hostname(),
+            "devices": [{"local_id": d["id"], "name": d["name"],
+                         "host": d["host"], "enabled": d["enabled"]}
+                        for d in unregistered],
+        }
+        resp = _post(f"{c['hub_url']}/agent/v1/devices", c["site_key"], payload)
+        id_map = resp.get("id_map") or {}
+        tagged = 0
+        for local_id_str, hub_id in id_map.items():
+            try:
+                database.update_device(int(local_id_str), hub_id=int(hub_id))
+                tagged += 1
+            except (TypeError, ValueError):
+                continue
+        if tagged:
+            log.info("agent registered %d local device(s) with the hub", tagged)
+
     def _sync_config(self, c):
-        """Pull the hub's device list and mirror it into the local DB so the
-        normal monitor pings exactly those devices."""
+        """Pull any hub-defined devices for this site and mirror them into the
+        local DB so the normal monitor pings them too. Non-destructive: devices
+        added on this agent (and pushed up via _register_local) are never
+        removed here — only pure hub-side mirrors are updated."""
         url = f"{c['hub_url']}/agent/v1/config?v={AGENT_VERSION}&host={self._hostname()}"
         cfg = _get(url, c["site_key"])
         wanted = {int(d["id"]): d for d in cfg.get("devices", [])}
-        # index local agent-managed devices by their hub_id
+        # index local devices already linked to a hub device
         local = {d["hub_id"]: d for d in database.list_devices()
                  if d.get("hub_id")}
-        # add / update
         for hub_id, d in wanted.items():
             iv = d.get("interval")
             fields = dict(name=d["name"], host=d["host"],
@@ -166,10 +194,6 @@ class Agent:
                 database.update_device(new_id, hub_id=hub_id, **{
                     k: v for k, v in fields.items()
                     if k in ("warn_override", "crit_override", "tcp_ports", "check_url")})
-        # remove local mirrors the hub no longer wants
-        for hub_id, d in local.items():
-            if hub_id not in wanted:
-                database.delete_device(d["id"])
 
     def _push(self, c):
         st = _load_state()

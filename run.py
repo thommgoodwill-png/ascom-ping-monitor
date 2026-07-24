@@ -25,14 +25,31 @@ from pingmon.app import create_app  # noqa: E402
 app = create_app()
 
 
-def _tray_icon(port):
-    """Optional Windows system-tray icon with Open / Quit. Needs pystray+Pillow;
-    silently skipped if unavailable (the GUI Quit button still works)."""
-    try:
-        import pystray
-        from PIL import Image, ImageDraw
-    except Exception:
-        return
+def _tray_image():
+    """The tray icon image: prefer a user-supplied logo, then the bundled Ascom
+    favicon, then a drawn red 'a' placeholder. Returns a 64x64 RGBA PIL image."""
+    from PIL import Image
+    from pingmon import database
+
+    # 1) real Ascom icon — user override in the data dir, then the bundled one
+    base = sys._MEIPASS if _FROZEN else os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(database.DATA_DIR, "branding", "favicon.ico"),
+        os.path.join(database.DATA_DIR, "branding", "logo.png"),
+        os.path.join(base, "static", "branding", "favicon.ico"),
+    ]
+    for path in candidates:
+        try:
+            if os.path.exists(path):
+                im = Image.open(path)
+                if getattr(im, "is_animated", False):
+                    im.seek(0)
+                return im.convert("RGBA").resize((64, 64), Image.LANCZOS)
+        except Exception:
+            continue
+
+    # 2) fallback: draw the Ascom-red rounded tile with an 'a'
+    from PIL import ImageDraw
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle([2, 2, 62, 62], radius=12, fill=(218, 41, 28, 255))
@@ -42,6 +59,20 @@ def _tray_icon(port):
     except Exception:
         f = None
     d.text((18, 4), "a", fill=(255, 255, 255, 255), font=f)
+    return img
+
+
+def _tray_icon(port):
+    """Optional Windows system-tray icon with Open / Quit. Needs pystray+Pillow;
+    silently skipped if unavailable (the GUI Quit button still works)."""
+    try:
+        import pystray
+    except Exception:
+        return
+    try:
+        img = _tray_image()
+    except Exception:
+        return
 
     def _open(icon, item):
         webbrowser.open(f"http://127.0.0.1:{port}")

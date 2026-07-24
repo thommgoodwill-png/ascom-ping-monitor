@@ -73,6 +73,55 @@ def config(site):
         devices=devices)
 
 
+@bp.route("/devices", methods=["POST"])
+@site_auth
+def register_devices(site):
+    """Register the devices an agent monitors locally so they appear in the
+    controller under this site.
+
+    Body: { "version": "..", "host": "..",
+            "devices": [ {"local_id": 3, "name": "Gateway", "host": "192.168.0.1",
+                          "enabled": true}, ... ] }
+
+    Devices are matched to existing site devices by host (case-insensitive) so
+    repeated registration is idempotent — it never creates duplicates. Returns
+    { "id_map": { "<local_id>": <hub_device_id> } } so the agent can tag each
+    local device and then push its ping data under the right hub id.
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    incoming = data.get("devices") or []
+    # existing site devices indexed by normalised host
+    existing = {}
+    for d in database.list_devices(site_id=site["id"]):
+        existing[(d["host"] or "").strip().lower()] = d
+
+    id_map = {}
+    for dev in incoming[:1000]:
+        try:
+            local_id = int(dev.get("local_id"))
+        except (TypeError, ValueError):
+            continue
+        host = (dev.get("host") or "").strip()
+        if not host:
+            continue
+        name = (str(dev.get("name") or host)).strip()[:120]
+        enabled = 1 if dev.get("enabled", 1) else 0
+        row = existing.get(host.lower())
+        if row:
+            hub_id = row["id"]
+            database.update_device(hub_id, name=name, enabled=enabled)
+        else:
+            hub_id = database.add_device(name, host, enabled, site_id=site["id"])
+            existing[host.lower()] = database.get_device(hub_id)
+        id_map[str(local_id)] = hub_id
+
+    database.touch_site(site["id"], agent_version=data.get("version"),
+                        agent_host=data.get("host"))
+    log.info("site %s: registered/updated %d devices from agent",
+             site["id"], len(id_map))
+    return jsonify(ok=True, id_map=id_map)
+
+
 @bp.route("/report", methods=["POST"])
 @site_auth
 def report(site):
