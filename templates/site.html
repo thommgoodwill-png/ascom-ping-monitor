@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="margin-bottom:8px;"><a href="/customers" class="muted">← Customers</a>
+  <span id="crumb"></span></div>
+<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+  <h1 class="page-title" id="site-title" style="margin:0;">Site</h1>
+  <span class="pill" id="agent-pill">…</span>
+  <span class="muted" id="agent-meta"></span>
+</div>
+
+<div class="card" style="margin-top:16px;">
+  <h2>Add a device to monitor at this site</h2>
+  <p class="card-sub">The agent at this site pulls this list and pings these devices on
+    the customer's own network, reporting results back here.</p>
+  <div class="f-row">
+    <div><label class="f-label">Name</label><input type="text" id="d-name" placeholder="Core switch"></div>
+    <div><label class="f-label">IP / hostname</label><input type="text" id="d-host" placeholder="192.168.1.1"></div>
+    <div><label class="f-label">TCP ports <span class="muted">(optional)</span></label><input type="text" id="d-ports" placeholder="443, 22"></div>
+    <div><label class="f-label">HTTP(S) URL <span class="muted">(optional)</span></label><input type="text" id="d-url" placeholder="https://host/health"></div>
+    <div style="display:flex;align-items:flex-end;"><button class="btn primary" id="d-add">+ Add</button></div>
+  </div>
+</div>
+
+<div class="filter-row">
+  <div class="range-group" id="range-group">
+    <button class="range-btn" data-sec="900">15 m</button>
+    <button class="range-btn active" data-sec="3600">1 h</button>
+    <button class="range-btn" data-sec="10800">3 h</button>
+    <button class="range-btn" data-sec="21600">6 h</button>
+    <button class="range-btn" data-sec="43200">12 h</button>
+    <button class="range-btn" data-sec="86400">24 h</button>
+    <button class="range-btn" data-sec="604800">7 d</button>
+    <button class="range-btn" data-sec="2592000">30 d</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>All devices at this site</h2>
+  <div class="legend" id="overview-legend"></div>
+  <div id="overview-chart"></div>
+</div>
+
+<div class="grid" id="device-grid"></div>
+<div class="card" id="no-devices" style="display:none;">
+  <h2>No devices yet</h2>
+  <p class="card-sub">Add a device above. Once the site's agent is online it will start
+    pinging them and data will appear here.</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  const SID = {{ site_id }};
+  let rangeSec = 3600, overview = null;
+  const miniCharts = new Map();
+
+  function pillFor(d, warn, crit) {
+    if (!d.enabled) return ["disabled", "○ Disabled"];
+    if (d.last_success === false) return ["down", "✖ Down"];
+    if (d.last_latency != null && d.last_latency > d.eff_crit) return ["crit", "■ Slow"];
+    if (d.last_latency != null && d.last_latency > d.eff_warn) return ["warn", "▲ Warn"];
+    if (d.last_latency != null) return ["up", "● Up"];
+    return ["unknown", "… Awaiting agent"];
+  }
+  function ms(v, w, c) {
+    if (v == null) return '<span class="muted">—</span>';
+    return '<span class="' + latClass(v, w, c) + '">' + v.toFixed(1) + '<span class="unit"> ms</span></span>';
+  }
+  function stat(label, html) {
+    return '<div class="stat"><div class="label">'+label+'</div><div class="value small">'+html+'</div></div>';
+  }
+
+  async function loadDevices() {
+    const data = await api("/api/sites/" + SID);
+    document.getElementById("site-title").textContent = data.site.name;
+    document.getElementById("crumb").innerHTML =
+      ' / <a href="/customers/'+data.site.customer_id+'" class="muted">'+
+      (data.site.customer_name||'')+'</a>';
+    const pill = document.getElementById("agent-pill");
+    pill.className = "pill " + (data.agent_online ? "up" : "disabled");
+    pill.textContent = data.agent_online ? "● Agent online" :
+      (data.site.last_seen ? "○ Agent offline" : "… No agent connected yet");
+    document.getElementById("agent-meta").textContent =
+      (data.site.agent_host ? "from " + data.site.agent_host + " " : "") +
+      (data.site.agent_version ? "· agent v"+data.site.agent_version+" " : "") +
+      (data.site.last_seen ? "· last seen " + fmtAgo(data.site.last_seen) : "");
+
+    const grid = document.getElementById("device-grid");
+    document.getElementById("no-devices").style.display = data.devices.length ? "none" : "block";
+    for (const d of data.devices) {
+      let card = document.getElementById("dev-"+d.id);
+      if (!card) {
+        card = document.createElement("div"); card.className="card"; card.id="dev-"+d.id;
+        card.innerHTML = '<div class="dev-head"><span class="pill unknown"></span>'+
+          '<span class="name"></span><span class="host"></span></div>'+
+          '<div class="stats"></div><div class="mini-chart"></div>';
+        grid.appendChild(card);
+      }
+      const [cls,label] = pillFor(d, data.warn_ms, data.crit_ms);
+      const p = card.querySelector(".pill"); p.className="pill "+cls; p.textContent=label;
+      card.querySelector(".name").textContent = d.name;
+      card.querySelector(".host").textContent = d.host + (d.mac? " · "+d.mac:"") + (d.vendor? " · "+d.vendor:"");
+      card.querySelector(".stats").innerHTML =
+        stat("Last ping", ms(d.last_latency, d.eff_warn, d.eff_crit)) +
+        stat("1 h avg", ms(d.hour_avg, d.eff_warn, d.eff_crit)) +
+        stat("1 h max", ms(d.hour_max, d.eff_warn, d.eff_crit)) +
+        stat("1 h loss", d.hour_loss==null?'<span class="muted">—</span>':
+          '<span class="'+(d.hour_loss>0?"v-crit":"v-good")+'">'+d.hour_loss.toFixed(1)+'<span class="unit"> %</span></span>') +
+        stat("Checked", '<span class="muted">'+fmtAgo(d.last_ts)+'</span>');
+    }
+    const ids = new Set(data.devices.map(d=>"dev-"+d.id));
+    for (const el of Array.from(grid.children)) if (!ids.has(el.id)) el.remove();
+    return data;
+  }
+
+  async function loadHistory() {
+    const h = await api("/api/sites/" + SID + "/history?seconds=" + rangeSec);
+    const devs = h.devices;
+    const series = devs.map((d,i)=>({name:d.name,colorIndex:i,data:h.series[String(d.id)]||[]}));
+    const opts = {series, start:h.start, end:h.end, bucket:h.bucket, warn:h.warn_ms,
+      crit:h.crit_ms, height:260, thresholdColoring: devs.length===1};
+    if (!overview) overview = new LatencyChart(document.getElementById("overview-chart"), opts);
+    else overview.update(opts);
+    const leg = document.getElementById("overview-legend"); leg.innerHTML="";
+    if (devs.length>=2) devs.forEach((d,i)=>{
+      const it=document.createElement("span"); it.className="item";
+      const k=document.createElement("span"); k.className="key"; k.style.borderTopColor=chartSeriesColor(i);
+      const nm=document.createElement("span"); nm.textContent=d.name;
+      it.append(k,nm); leg.appendChild(it);
+    });
+    for (const [i,d] of devs.entries()) {
+      const card=document.getElementById("dev-"+d.id); if(!card) continue;
+      const box=card.querySelector(".mini-chart");
+      const o={series:[{name:d.name,colorIndex:i,data:h.series[String(d.id)]||[]}],
+        start:h.start,end:h.end,bucket:h.bucket,warn:d.eff_warn,crit:d.eff_crit,height:150,thresholdColoring:true};
+      if(!miniCharts.has(d.id)) miniCharts.set(d.id,new LatencyChart(box,o)); else miniCharts.get(d.id).update(o);
+    }
+    for (const [id,ch] of miniCharts) if(!devs.find(d=>d.id===id)){ch.destroy();miniCharts.delete(id);}
+  }
+
+  async function refresh(){ try{ await loadDevices(); await loadHistory(); }catch(e){ if(e.message!=="auth") toast(e.message,true);} }
+
+  document.getElementById("range-group").addEventListener("click", ev=>{
+    const b=ev.target.closest(".range-btn"); if(!b) return;
+    document.querySelectorAll(".range-btn").forEach(x=>x.classList.remove("active"));
+    b.classList.add("active"); rangeSec=parseInt(b.dataset.sec,10);
+    loadHistory().catch(e=>toast(e.message,true));
+  });
+
+  document.getElementById("d-add").addEventListener("click", async ()=>{
+    const name=document.getElementById("d-name").value.trim();
+    const host=document.getElementById("d-host").value.trim();
+    if(!name||!host){ toast("Name and host required",true); return; }
+    try {
+      await api("/api/sites/"+SID+"/devices",{method:"POST",body:JSON.stringify({
+        name,host,tcp_ports:document.getElementById("d-ports").value.trim()||null,
+        check_url:document.getElementById("d-url").value.trim()||null})});
+      ["d-name","d-host","d-ports","d-url"].forEach(id=>document.getElementById(id).value="");
+      toast("Device added — the site agent will pick it up on its next sync");
+      refresh();
+    } catch(e){ toast(e.message,true); }
+  });
+
+  refresh();
+  setInterval(refresh, 15000);
+})();
+</script>
+{% endblock %}

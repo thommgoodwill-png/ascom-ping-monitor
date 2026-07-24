@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="page-title">Devices</h1>
+
+<div class="card">
+  <h2>Add a device</h2>
+  <p class="card-sub">Anything that answers ICMP ping — servers, switches, APs, printers, gateways.</p>
+  <div class="f-row">
+    <div>
+      <label class="f-label" for="add-name">Name</label>
+      <input type="text" id="add-name" placeholder="Core switch">
+    </div>
+    <div>
+      <label class="f-label" for="add-host">IP address or hostname</label>
+      <input type="text" id="add-host" placeholder="192.168.1.1">
+    </div>
+    <div>
+      <label class="f-label" for="add-interval">Ping interval override <span class="muted">(optional)</span></label>
+      <input type="number" id="add-interval" min="0.2" max="60" step="0.1" placeholder="use global">
+      <div class="f-help">Seconds, 0.2–60. Leave blank to use the global interval.</div>
+    </div>
+    <div>
+      <label class="f-label" for="add-warn">Warn / crit override (ms) <span class="muted">(optional)</span></label>
+      <div style="display:flex;gap:6px;">
+        <input type="number" id="add-warn" min="1" step="1" placeholder="warn">
+        <input type="number" id="add-crit" min="1" step="1" placeholder="crit">
+      </div>
+      <div class="f-help">Per-device thresholds — e.g. a VPN link that is always ~80 ms. Blank = global.</div>
+    </div>
+    <div>
+      <label class="f-label" for="add-ports">TCP ports to check <span class="muted">(optional)</span></label>
+      <input type="text" id="add-ports" placeholder="443, 22, 3389">
+      <div class="f-help">Comma-separated. Checks the service is actually listening, not just that the host pings.</div>
+    </div>
+    <div>
+      <label class="f-label" for="add-url">HTTP(S) health URL <span class="muted">(optional)</span></label>
+      <input type="text" id="add-url" placeholder="https://host/health">
+      <div class="f-help">Checks status code, response time and TLS certificate expiry.</div>
+    </div>
+    <div style="display:flex;align-items:flex-end;">
+      <button class="btn primary" id="add-btn">+ Add device</button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Monitored devices</h2>
+  <p class="card-sub">Toggle a device off to pause pinging it without losing its history.</p>
+  <table class="list" id="dev-table">
+    <thead>
+      <tr>
+        <th>Enabled</th><th>Name</th><th>Host</th><th>MAC</th>
+        <th class="num">Interval</th><th class="num">Warn/Crit</th>
+        <th>Status</th><th class="num">Last ping</th><th class="right">Actions</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  <p class="muted" id="dev-empty" style="display:none;">No devices yet — add one above.</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+
+  function pillFor(d) {
+    if (!d.enabled) return ["disabled", "○ Disabled"];
+    if (d.state === "down") return ["down", "✖ Down"];
+    if (d.in_loss) return ["warn", "▲ Loss"];
+    if (d.state === "up") {
+      if (d.last_latency != null && d.last_latency > d.eff_crit) return ["crit", "■ Slow"];
+      if (d.last_latency != null && d.last_latency > d.eff_warn) return ["warn", "▲ Warn"];
+      return ["up", "● Up"];
+    }
+    return ["unknown", "… Waiting"];
+  }
+
+  async function load() {
+    const data = await api("/api/devices");
+    const tb = document.querySelector("#dev-table tbody");
+    tb.innerHTML = "";
+    document.getElementById("dev-empty").style.display =
+      data.devices.length ? "none" : "block";
+    for (const d of data.devices) {
+      const tr = document.createElement("tr");
+
+      // enabled switch
+      const tdEn = document.createElement("td");
+      const sw = document.createElement("label");
+      sw.className = "switch";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = !!d.enabled;
+      cb.addEventListener("change", async () => {
+        try { await api("/api/devices/" + d.id, { method: "PUT", body: JSON.stringify({ enabled: cb.checked }) }); }
+        catch (e) { toast(e.message, true); cb.checked = !cb.checked; }
+      });
+      const tk = document.createElement("span"); tk.className = "track";
+      sw.appendChild(cb); sw.appendChild(tk); tdEn.appendChild(sw); tr.appendChild(tdEn);
+
+      const tdName = document.createElement("td");
+      tdName.style.fontWeight = "600";
+      tdName.textContent = d.name;
+      tr.appendChild(tdName);
+      const tdHost = document.createElement("td");
+      tdHost.textContent = d.host;
+      tr.appendChild(tdHost);
+      const tdMac = document.createElement("td");
+      tdMac.className = "mono";
+      tdMac.style.fontSize = "12px";
+      tdMac.textContent = (d.mac || "—") + (d.vendor ? "  " + d.vendor : "");
+      tdMac.title = d.mac ? "picked up from the ARP table" :
+        "no MAC yet — only learnable for devices on the monitor's own subnet";
+      tr.appendChild(tdMac);
+      const tdInt = document.createElement("td");
+      tdInt.className = "num mono";
+      tdInt.textContent = d.interval_override ? d.interval_override + " s" : "global";
+      tr.appendChild(tdInt);
+
+      const tdThr = document.createElement("td");
+      tdThr.className = "num mono";
+      tdThr.textContent = (d.warn_override || d.crit_override)
+        ? d.eff_warn + " / " + d.eff_crit : "global";
+      tr.appendChild(tdThr);
+
+      const tdSt = document.createElement("td");
+      const [cls, label] = pillFor(d);
+      const pill = document.createElement("span");
+      pill.className = "pill " + cls;
+      pill.textContent = label;
+      tdSt.appendChild(pill);
+      tr.appendChild(tdSt);
+
+      const tdLat = document.createElement("td");
+      tdLat.className = "num mono";
+      if (d.last_latency != null) {
+        tdLat.textContent = d.last_latency.toFixed(1) + " ms";
+        tdLat.className += " " + latClass(d.last_latency, d.eff_warn, d.eff_crit);
+      } else tdLat.textContent = "—";
+      tr.appendChild(tdLat);
+
+      const tdAct = document.createElement("td");
+      tdAct.className = "right";
+      const edit = document.createElement("button");
+      edit.className = "btn small";
+      edit.textContent = "Edit";
+      edit.addEventListener("click", () => editDevice(d));
+      const del = document.createElement("button");
+      del.className = "btn small danger";
+      del.style.marginLeft = "6px";
+      del.textContent = "Delete";
+      del.addEventListener("click", async () => {
+        if (!confirm('Delete "' + d.name + '" and all of its history?')) return;
+        try { await api("/api/devices/" + d.id, { method: "DELETE" }); load(); }
+        catch (e) { toast(e.message, true); }
+      });
+      tdAct.appendChild(edit); tdAct.appendChild(del);
+      tr.appendChild(tdAct);
+      tb.appendChild(tr);
+    }
+  }
+
+  function editDevice(d) {
+    const name = prompt("Device name:", d.name);
+    if (name === null) return;
+    const host = prompt("IP address or hostname:", d.host);
+    if (host === null) return;
+    const iv = prompt("Ping interval override in seconds (0.2–60, blank = use global):",
+                      d.interval_override || "");
+    if (iv === null) return;
+    const wo = prompt("Warning threshold override in ms (blank = global):",
+                      d.warn_override || "");
+    if (wo === null) return;
+    const co = prompt("Critical threshold override in ms (blank = global):",
+                      d.crit_override || "");
+    if (co === null) return;
+    api("/api/devices/" + d.id, {
+      method: "PUT",
+      body: JSON.stringify({
+        name: name, host: host,
+        interval_override: iv === "" ? null : iv,
+        warn_override: wo === "" ? null : wo,
+        crit_override: co === "" ? null : co,
+      }),
+    }).then(load).catch(e => toast(e.message, true));
+  }
+
+  document.getElementById("add-btn").addEventListener("click", async () => {
+    const name = document.getElementById("add-name").value.trim();
+    const host = document.getElementById("add-host").value.trim();
+    const iv = document.getElementById("add-interval").value.trim();
+    const wo = document.getElementById("add-warn").value.trim();
+    const co = document.getElementById("add-crit").value.trim();
+    const ports = document.getElementById("add-ports").value.trim();
+    const url = document.getElementById("add-url").value.trim();
+    if (!name || !host) { toast("Name and host are required", true); return; }
+    try {
+      await api("/api/devices", {
+        method: "POST",
+        body: JSON.stringify({ name: name, host: host, interval_override: iv || null,
+                               warn_override: wo || null, crit_override: co || null,
+                               tcp_ports: ports || null, check_url: url || null }),
+      });
+      ["add-name","add-host","add-interval","add-warn","add-crit","add-ports","add-url"]
+        .forEach(id => document.getElementById(id).value = "");
+      toast("Device added — pinging starts within a few seconds");
+      load();
+    } catch (e) { toast(e.message, true); }
+  });
+
+  load();
+  setInterval(load, 10000);
+})();
+</script>
+{% endblock %}

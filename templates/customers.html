@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="page-title">Customers</h1>
+<div class="card">
+  <h2>Add a customer</h2>
+  <p class="card-sub">Each customer contains one or more sites. A site is monitored by
+    an agent running on a machine at that location, reporting back here.</p>
+  <div class="f-row">
+    <div>
+      <label class="f-label" for="c-name">Customer name</label>
+      <input type="text" id="c-name" placeholder="Acme Ltd">
+    </div>
+    <div>
+      <label class="f-label" for="c-notes">Notes <span class="muted">(optional)</span></label>
+      <input type="text" id="c-notes" placeholder="account ref, contact…">
+    </div>
+    <div style="display:flex;align-items:flex-end;">
+      <button class="btn primary" id="c-add">+ Add customer</button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>All customers</h2>
+  <table class="list" id="c-table">
+    <thead><tr><th>Customer</th><th class="num">Sites</th><th>Notes</th><th class="right">Actions</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p class="muted" id="c-empty" style="display:none;">No customers yet — add one above.</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  async function load() {
+    const d = await api("/api/customers");
+    const tb = document.querySelector("#c-table tbody");
+    tb.innerHTML = "";
+    document.getElementById("c-empty").style.display = d.customers.length ? "none" : "block";
+    for (const c of d.customers) {
+      const tr = document.createElement("tr");
+      const n = document.createElement("td");
+      const a = document.createElement("a");
+      a.href = "/customers/" + c.id; a.textContent = c.name;
+      a.style.cssText = "font-weight:600;color:var(--ascom);text-decoration:none;";
+      n.appendChild(a); tr.appendChild(n);
+      const sc = document.createElement("td"); sc.className = "num mono";
+      sc.textContent = c.site_count; tr.appendChild(sc);
+      const no = document.createElement("td"); no.className = "muted";
+      no.textContent = c.notes || ""; tr.appendChild(no);
+      const ac = document.createElement("td"); ac.className = "right";
+      const open = document.createElement("a");
+      open.className = "btn small"; open.textContent = "Open"; open.href = "/customers/" + c.id;
+      const del = document.createElement("button");
+      del.className = "btn small danger"; del.style.marginLeft = "6px"; del.textContent = "Delete";
+      del.addEventListener("click", async () => {
+        if (!confirm('Delete "' + c.name + '" and all its sites, devices and history?')) return;
+        try { await api("/api/customers/" + c.id, { method: "DELETE" }); load(); }
+        catch (e) { toast(e.message, true); }
+      });
+      ac.append(open, del); tr.appendChild(ac);
+      tb.appendChild(tr);
+    }
+  }
+  document.getElementById("c-add").addEventListener("click", async () => {
+    const name = document.getElementById("c-name").value.trim();
+    if (!name) { toast("Name required", true); return; }
+    try {
+      await api("/api/customers", { method: "POST", body: JSON.stringify({
+        name: name, notes: document.getElementById("c-notes").value.trim() }) });
+      document.getElementById("c-name").value = "";
+      document.getElementById("c-notes").value = "";
+      load();
+    } catch (e) { toast(e.message, true); }
+  });
+  load();
+})();
+</script>
+{% endblock %}

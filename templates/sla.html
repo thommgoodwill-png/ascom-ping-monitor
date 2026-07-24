@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="page-title">Uptime / SLA report</h1>
+<div class="card">
+  <h2>Per-device availability</h2>
+  <p class="card-sub">Uptime is measured from down/up events (a device counts as down
+    after the configured consecutive failures). Use the CSV for ISP or vendor evidence.</p>
+  <div class="filter-row" style="margin-bottom:12px;">
+    <div class="range-group" id="sla-days">
+      <button class="range-btn" data-d="7">7 d</button>
+      <button class="range-btn active" data-d="30">30 d</button>
+      <button class="range-btn" data-d="90">90 d</button>
+    </div>
+    <a class="btn small" id="sla-csv" href="/api/sla.csv?days=30">⬇ Download CSV</a>
+  </div>
+  <table class="list" id="sla-table">
+    <thead>
+      <tr>
+        <th>Device</th><th class="num">Uptime</th><th class="num">Downtime</th>
+        <th class="num">Outages</th><th class="num">Loss</th><th class="num">Avg</th>
+        <th class="num">Max</th><th class="num">Jitter</th>
+        <th class="num">▲ Warn</th><th class="num">■ Crit</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+<div class="card">
+  <h2>Worst outages in the period</h2>
+  <table class="list" id="outage-table">
+    <thead><tr><th>Device</th><th>Start</th><th>End</th><th class="num">Duration</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p class="muted" id="outage-empty" style="display:none;">No outages recorded — a clean period.</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  let days = 30;
+
+  function fmtDur(s) {
+    s = Math.round(s);
+    if (s < 60) return s + "s";
+    if (s < 3600) return Math.floor(s / 60) + "m " + (s % 60) + "s";
+    if (s < 86400) return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m";
+    return Math.floor(s / 86400) + "d " + Math.floor((s % 86400) / 3600) + "h";
+  }
+
+  function uptimeClass(p) {
+    if (p >= 99.9) return "v-good";
+    if (p >= 99.0) return "v-warn";
+    return "v-crit";
+  }
+
+  async function load() {
+    const data = await api("/api/sla?days=" + days);
+    const tb = document.querySelector("#sla-table tbody");
+    tb.innerHTML = "";
+    const outages = [];
+    for (const d of data.devices) {
+      const tr = document.createElement("tr");
+      const cells = [
+        [d.name, "", true],
+        [d.uptime_pct.toFixed(3) + " %", uptimeClass(d.uptime_pct)],
+        [fmtDur(d.downtime_s), d.downtime_s > 0 ? "v-crit" : "v-good"],
+        [String(d.outage_count), ""],
+        [d.loss_pct == null ? "—" : d.loss_pct.toFixed(2) + " %",
+         d.loss_pct > 0 ? "v-warn" : ""],
+        [d.avg_ms == null ? "—" : d.avg_ms.toFixed(1) + " ms", ""],
+        [d.max_ms == null ? "—" : d.max_ms.toFixed(1) + " ms", ""],
+        [d.jitter_ms == null ? "—" : d.jitter_ms.toFixed(1) + " ms", ""],
+        [String(d.warns), d.warns ? "v-warn" : ""],
+        [String(d.crits), d.crits ? "v-crit" : ""],
+      ];
+      cells.forEach(([txt, cls, isName], i) => {
+        const td = document.createElement("td");
+        td.textContent = txt;
+        if (i > 0) td.className = "num mono " + (cls || "");
+        if (isName) { td.style.fontWeight = "600"; }
+        tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+      for (const o of d.outages) outages.push({name: d.name, o: o});
+    }
+    outages.sort((a, b) => b.o[2] - a.o[2]);
+    const ob = document.querySelector("#outage-table tbody");
+    ob.innerHTML = "";
+    document.getElementById("outage-empty").style.display =
+      outages.length ? "none" : "block";
+    for (const {name, o} of outages.slice(0, 25)) {
+      const tr = document.createElement("tr");
+      const c1 = document.createElement("td");
+      c1.textContent = name; c1.style.fontWeight = "600";
+      const c2 = document.createElement("td");
+      c2.textContent = new Date(o[0] * 1000).toLocaleString();
+      const c3 = document.createElement("td");
+      c3.textContent = o[1] ? new Date(o[1] * 1000).toLocaleString() : "still down";
+      const c4 = document.createElement("td");
+      c4.className = "num mono v-crit";
+      c4.textContent = fmtDur(o[2]);
+      tr.append(c1, c2, c3, c4);
+      ob.appendChild(tr);
+    }
+  }
+
+  document.getElementById("sla-days").addEventListener("click", ev => {
+    const b = ev.target.closest(".range-btn"); if (!b) return;
+    document.querySelectorAll("#sla-days .range-btn").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    days = parseInt(b.dataset.d, 10);
+    document.getElementById("sla-csv").href = "/api/sla.csv?days=" + days;
+    load().catch(e => toast(e.message, true));
+  });
+
+  load().catch(e => toast(e.message, true));
+})();
+</script>
+{% endblock %}
