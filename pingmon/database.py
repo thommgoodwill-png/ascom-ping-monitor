@@ -599,6 +599,14 @@ def max_ping_id():
     return (r["m"] if r and r["m"] is not None else 0)
 
 
+def first_ping_id_since(ts):
+    """Smallest ping id with a timestamp >= ts (None if none). Lets the agent
+    skip a large stale backlog and push only recent pings after reconnecting."""
+    r = get_db().execute(
+        "SELECT MIN(id) AS m FROM pings WHERE ts >= ?", (ts,)).fetchone()
+    return (r["m"] if r and r["m"] is not None else None)
+
+
 def record_pushed_pings(device_id, samples):
     """Bulk-insert ping samples an agent pushed. samples: [[ts,lat,success,jitter],…]"""
     if not samples:

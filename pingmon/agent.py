@@ -17,7 +17,10 @@ from . import database, settings
 
 log = logging.getLogger("pingmon.agent")
 
-AGENT_VERSION = "1.2"   # 1.2 = watermark self-heal + self-report diagnostics
+AGENT_VERSION = "1.3"   # 1.3 = skip stale backlog on (re)connect
+# When (re)connecting with a big unsent backlog, only push pings from the last
+# this-many seconds; older queued pings are skipped rather than replayed.
+BACKFILL_WINDOW = 900   # 15 minutes
 CONF_PATH = os.path.join(database.DATA_DIR, "agent.json")
 STATE_PATH = os.path.join(database.DATA_DIR, "agent_state.json")
 
@@ -251,6 +254,18 @@ class Agent:
             log.warning("agent: ping watermark %s ahead of max id %s — resetting",
                         wm, max_id)
             wm = 0
+
+        # Skip a large stale backlog. If this agent monitored locally for a
+        # long time before being connected to a hub (or was offline a while),
+        # it can hold days of unsent pings. Replaying them oldest-first floods
+        # the hub with ancient data and delays current readings by hours — so
+        # jump the watermark forward and push only the last BACKFILL_WINDOW.
+        recent_id = database.first_ping_id_since(time.time() - BACKFILL_WINDOW)
+        if recent_id is not None and recent_id - 1 > wm:
+            skipped = recent_id - 1 - wm
+            log.warning("agent: skipping %d stale queued pings; sending only the "
+                        "last %d min", skipped, BACKFILL_WINDOW // 60)
+            wm = recent_id - 1
 
         pings = database.pings_after(wm, limit=5000)
         by_hub = {}
