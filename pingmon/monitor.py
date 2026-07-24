@@ -355,7 +355,12 @@ class Monitor:
             self._stop.wait(3)
 
     def _reconcile(self):
-        devices = {d["id"]: d for d in database.list_devices(enabled_only=True)}
+        # Only ping devices that belong to THIS instance locally (site_id IS
+        # NULL). Site devices (site_id set) are monitored by their own agent and
+        # their results are pushed in — the hub must NOT ping them, or its
+        # unreachable pings would overwrite the agent's real up/down data.
+        devices = {d["id"]: d for d in
+                   database.list_devices(enabled_only=True, site_id=None)}
         # stop workers for removed/disabled devices
         for dev_id in list(self.workers):
             if dev_id not in devices:
