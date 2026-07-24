@@ -13,6 +13,28 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 # ---------------- passwords ----------------
 
+import re
+
+# Minimum strong-password policy, enforced everywhere a password is set.
+PASSWORD_MIN = 10
+
+
+def password_strength_error(pw):
+    """Return None if the password is strong enough, else a message explaining
+    what's missing. Policy: >= 10 chars with lower, upper, number and symbol."""
+    pw = pw or ""
+    if len(pw) < PASSWORD_MIN:
+        return f"Password must be at least {PASSWORD_MIN} characters long."
+    checks = [(r"[a-z]", "a lowercase letter"),
+              (r"[A-Z]", "an uppercase letter"),
+              (r"[0-9]", "a number"),
+              (r"[^A-Za-z0-9]", "a symbol")]
+    missing = [name for rx, name in checks if not re.search(rx, pw)]
+    if missing:
+        return "Password must include " + ", ".join(missing) + "."
+    return None
+
+
 def hash_password(pw):
     return generate_password_hash(pw)
 

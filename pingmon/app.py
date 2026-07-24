@@ -908,8 +908,9 @@ def register_routes(app):
             return jsonify(error="username and password required"), 400
         if database.get_user_by_name(username):
             return jsonify(error="that username already exists"), 400
-        if len(pw) < 6:
-            return jsonify(error="password must be at least 6 characters"), 400
+        pwerr = auth.password_strength_error(pw)
+        if pwerr:
+            return jsonify(error=pwerr), 400
         # enforce the allowed-email list on new accounts
         patterns = auth.parse_email_patterns(settings.get("allowed_emails"))
         if email and not auth.email_allowed(email, patterns):
@@ -940,8 +941,9 @@ def register_routes(app):
                 return jsonify(error="cannot disable the last administrator"), 400
             fields["disabled"] = dis
         if data.get("password"):
-            if len(data["password"]) < 6:
-                return jsonify(error="password must be at least 6 characters"), 400
+            pwerr = auth.password_strength_error(data["password"])
+            if pwerr:
+                return jsonify(error=pwerr), 400
             fields["password_hash"] = auth.hash_password(data["password"])
         if data.get("reset_2fa"):
             fields["totp_enabled"] = 0
@@ -1018,6 +1020,30 @@ def register_routes(app):
                                role=(inv["role"] if inv else ""),
                                theme=settings.get("default_theme"))
 
+    @app.route("/api/invite/<token>/2fa-begin", methods=["POST"])
+    def api_invite_2fa_begin(token):
+        """Generate a pending TOTP secret for an invitee (mandatory 2FA)."""
+        from . import auth
+        inv = database.get_invite(token)
+        if not inv or inv["accepted"] or inv["expires_at"] <= time.time():
+            return jsonify(error="this invite is invalid or has expired"), 400
+        secret = auth.new_totp_secret()
+        session["invite_totp_" + token] = secret
+        uri = auth.otpauth_uri(secret, inv["email"])
+        return jsonify(secret=secret, uri=uri, qr=_qr_available())
+
+    @app.route("/invite/<token>/qr.svg")
+    def invite_qr(token):
+        secret = session.get("invite_totp_" + token)
+        inv = database.get_invite(token)
+        if not secret or not inv:
+            return "no pending setup", 404
+        from . import auth
+        svg = _make_qr_svg(auth.otpauth_uri(secret, inv["email"]))
+        if svg is None:
+            return "qr unavailable", 404
+        return app.response_class(svg, mimetype="image/svg+xml")
+
     @app.route("/api/invite/<token>", methods=["POST"])
     def api_accept_invite(token):
         from . import auth
@@ -1025,20 +1051,31 @@ def register_routes(app):
         if not inv or inv["accepted"] or inv["expires_at"] <= time.time():
             return jsonify(error="this invite is invalid or has expired"), 400
         data = request.get_json(force=True) or {}
-        username = (data.get("username") or "").strip()
         pw = data.get("password") or ""
-        if not username or not pw:
-            return jsonify(error="username and password required"), 400
-        if len(pw) < 6:
-            return jsonify(error="password must be at least 6 characters"), 400
+        code = data.get("code") or ""
+        pwerr = auth.password_strength_error(pw)
+        if pwerr:
+            return jsonify(error=pwerr), 400
+        # username IS the invited email address
+        username = (inv["email"] or "").strip()
+        if not username:
+            return jsonify(error="this invite has no email set"), 400
         if database.get_user_by_name(username):
-            return jsonify(error="that username is already taken"), 400
+            return jsonify(error="an account for this email already exists"), 400
         # re-check the allow-list at acceptance time
         patterns = auth.parse_email_patterns(settings.get("allowed_emails"))
         if not auth.email_allowed(inv["email"], patterns):
             return jsonify(error="the invited email is no longer permitted"), 400
-        database.add_user(username, auth.hash_password(pw), inv["role"], inv["email"])
+        # 2FA is mandatory for invite sign-up
+        secret = session.get("invite_totp_" + token)
+        if not secret:
+            return jsonify(error="please set up two-factor authentication first"), 400
+        if not auth.verify_totp(secret, code):
+            return jsonify(error="that authentication code is incorrect"), 400
+        uid = database.add_user(username, auth.hash_password(pw), inv["role"], inv["email"])
+        database.update_user(uid, totp_secret=secret, totp_enabled=1)
         database.accept_invite(token)
+        session.pop("invite_totp_" + token, None)
         return jsonify(ok=True)
 
     # ---------------- own profile / 2FA (any logged-in user) ----------------
@@ -1061,8 +1098,9 @@ def register_routes(app):
         if not u or not auth.verify_password(u["password_hash"], data.get("current", "")):
             return jsonify(error="current password is incorrect"), 400
         new = data.get("new") or ""
-        if len(new) < 6:
-            return jsonify(error="new password must be at least 6 characters"), 400
+        pwerr = auth.password_strength_error(new)
+        if pwerr:
+            return jsonify(error=pwerr), 400
         database.update_user(u["id"], password_hash=auth.hash_password(new))
         return jsonify(ok=True)
 

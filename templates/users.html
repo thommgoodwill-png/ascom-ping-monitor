@@ -30,11 +30,12 @@
 <div class="card">
   <h2>Create a user manually</h2>
   <p class="card-sub">Standard users can use everything except User management and the
-    access-control settings. Admins can do everything.</p>
+    access-control settings. Admins can do everything. Passwords must be strong:
+    at least 10 characters with upper &amp; lowercase, a number and a symbol.</p>
   <div class="f-row">
     <div><label class="f-label">Username</label><input type="text" id="u-name" placeholder="jsmith"></div>
     <div><label class="f-label">Email</label><input type="email" id="u-email" placeholder="jsmith@ascom.com"></div>
-    <div><label class="f-label">Password</label><input type="password" id="u-pass" placeholder="min 6 chars"></div>
+    <div><label class="f-label">Password</label><input type="password" id="u-pass" placeholder="strong password"></div>
     <div><label class="f-label">Role</label>
       <select id="u-role"><option value="standard">Standard</option><option value="admin">Admin</option></select>
     </div>
@@ -87,7 +88,7 @@
       const aTd = document.createElement("td"); aTd.className="right";
       const mk = (label, cls, fn) => { const b=document.createElement("button"); b.className="btn small "+(cls||""); b.textContent=label; b.style.marginLeft="4px"; b.addEventListener("click",fn); return b; };
       aTd.appendChild(mk("Reset pw","",async()=>{
-        const p=prompt("New password for "+u.username+" (min 6):"); if(!p) return;
+        const p=prompt("New password for "+u.username+"\n(min 10 chars, with upper & lowercase, a number and a symbol):"); if(!p) return;
         try{ await api("/api/users/"+u.id,{method:"PUT",body:JSON.stringify({password:p})}); toast("Password reset"); }catch(e){ toast(e.message,true); }
       }));
       if (u.totp_enabled) aTd.appendChild(mk("Reset 2FA","",async()=>{
