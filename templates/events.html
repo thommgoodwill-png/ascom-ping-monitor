@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="page-title">Events</h1>
+{% if site_id %}{% include "_site_subnav.html" %}{% endif %}
+<h1 class="page-title">Events{% if site_id %} — {{ site.name }}{% endif %}</h1>
 <div class="card">
   <h2>Device outages &amp; recoveries</h2>
   <p class="card-sub">A device is marked down after the configured number of consecutive failed pings (see Settings).</p>
@@ -18,8 +19,9 @@
 <script>
 (function () {
   "use strict";
+  const SITE = {{ site_id or 0 }};
   async function load() {
-    const data = await api("/api/events?limit=300");
+    const data = await api("/api/events?limit=300" + (SITE ? "&site=" + SITE : ""));
     const tb = document.querySelector("#ev-table tbody");
     tb.innerHTML = "";
     document.getElementById("ev-empty").style.display =

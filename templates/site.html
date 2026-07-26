@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<div style="margin-bottom:8px;"><a href="/customers" class="muted">← Customers</a>
-  <span id="crumb"></span></div>
+{% include "_site_subnav.html" %}
 <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
   <h1 class="page-title" id="site-title" style="margin:0;">Site</h1>
   <span class="pill" id="agent-pill">…</span>
@@ -75,9 +74,6 @@
   async function loadDevices() {
     const data = await api("/api/sites/" + SID);
     document.getElementById("site-title").textContent = data.site.name;
-    document.getElementById("crumb").innerHTML =
-      ' / <a href="/customers/'+data.site.customer_id+'" class="muted">'+
-      (data.site.customer_name||'')+'</a>';
     const pill = document.getElementById("agent-pill");
     pill.className = "pill " + (data.agent_online ? "up" : "disabled");
     pill.textContent = data.agent_online ? "● Agent online" :

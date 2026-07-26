@@ -319,11 +319,12 @@ def heatmap(device_id, start, end):
              r["n"]] for r in rows]
 
 
-def sla_report(start, end, default_warn, default_crit):
-    """Per-device uptime, latency and outage summary for the SLA page."""
+def sla_report(start, end, default_warn, default_crit, site_id="__all__"):
+    """Per-device uptime, latency and outage summary for the SLA page.
+    site_id: '__all__' = every device; None = hub-local only; int = that site."""
     out = []
     span = max(end - start, 1)
-    for d in list_devices():
+    for d in list_devices(site_id=site_id):
         warn = d.get("warn_override") or default_warn
         crit = d.get("crit_override") or default_crit
         s = device_stats(d["id"], start, end, warn, crit)
@@ -699,7 +700,9 @@ def record_event(device_id, ts, etype, detail=""):
     return cur.lastrowid
 
 
-def list_events(limit=200, start=None, end=None):
+def list_events(limit=200, start=None, end=None, site_id="__all__"):
+    """Events, optionally scoped by site. site_id: '__all__' = every device;
+    None = hub-local devices only; an int = that site's devices."""
     q = ("SELECT e.*, d.name, d.host FROM events e "
          "JOIN devices d ON d.id = e.device_id")
     cond, vals = [], []
@@ -707,6 +710,10 @@ def list_events(limit=200, start=None, end=None):
         cond.append("e.ts >= ?"); vals.append(start)
     if end is not None:
         cond.append("e.ts <= ?"); vals.append(end)
+    if site_id is None:
+        cond.append("d.site_id IS NULL")
+    elif site_id != "__all__":
+        cond.append("d.site_id = ?"); vals.append(site_id)
     if cond:
         q += " WHERE " + " AND ".join(cond)
     q += " ORDER BY e.ts DESC LIMIT ?"

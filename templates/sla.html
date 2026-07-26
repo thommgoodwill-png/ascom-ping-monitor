@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="page-title">Uptime / SLA report</h1>
+{% if site_id %}{% include "_site_subnav.html" %}{% endif %}
+<h1 class="page-title">Uptime / SLA report{% if site_id %} — {{ site.name }}{% endif %}</h1>
 <div class="card">
   <h2>Per-device availability</h2>
   <p class="card-sub">Uptime is measured from down/up events (a device counts as down
@@ -39,7 +40,10 @@
 <script>
 (function () {
   "use strict";
+  const SITE = {{ site_id or 0 }};
+  const SITEQ = SITE ? "&site=" + SITE : "";
   let days = 30;
+  document.getElementById("sla-csv").href = "/api/sla.csv?days=30" + SITEQ;
 
   function fmtDur(s) {
     s = Math.round(s);
@@ -56,7 +60,7 @@
   }
 
   async function load() {
-    const data = await api("/api/sla?days=" + days);
+    const data = await api("/api/sla?days=" + days + SITEQ);
     const tb = document.querySelector("#sla-table tbody");
     tb.innerHTML = "";
     const outages = [];
@@ -111,7 +115,7 @@
     document.querySelectorAll("#sla-days .range-btn").forEach(x => x.classList.remove("active"));
     b.classList.add("active");
     days = parseInt(b.dataset.d, 10);
-    document.getElementById("sla-csv").href = "/api/sla.csv?days=" + days;
+    document.getElementById("sla-csv").href = "/api/sla.csv?days=" + days + SITEQ;
     load().catch(e => toast(e.message, true));
   });
 

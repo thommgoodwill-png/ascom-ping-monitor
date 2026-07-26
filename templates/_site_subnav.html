@@ -1,0 +1,11 @@
+<div style="margin-bottom:10px;">
+  <a href="/customers" class="muted">← Customers</a>
+  / <a href="/customers/{{ site.customer_id }}" class="muted">{{ site.customer_name }}</a>
+  / <span>{{ site.name }}</span>
+</div>
+<div class="filter-row" style="margin-bottom:16px;gap:6px;">
+  <a class="btn small {{ 'primary' if page_sub == 'devices' }}" href="/sites/{{ site_id }}">Devices</a>
+  <a class="btn small {{ 'primary' if page_sub == 'events' }}" href="/sites/{{ site_id }}/events">Events</a>
+  <a class="btn small {{ 'primary' if page_sub == 'heatmap' }}" href="/sites/{{ site_id }}/heatmap">Heatmap</a>
+  <a class="btn small {{ 'primary' if page_sub == 'sla' }}" href="/sites/{{ site_id }}/sla">SLA</a>
+</div>

@@ -323,9 +323,41 @@ def register_routes(app):
     @app.route("/sites/<int:site_id>")
     @login_required
     def site_page(site_id):
-        if not database.get_site(site_id):
+        site = database.get_site(site_id)
+        if not site:
             return redirect(url_for("customers_page"))
         return render_template("site.html", page="customers", site_id=site_id,
+                               site=site, page_sub="devices",
+                               theme=settings.get("default_theme"))
+
+    @app.route("/sites/<int:site_id>/events")
+    @login_required
+    def site_events_page(site_id):
+        site = database.get_site(site_id)
+        if not site:
+            return redirect(url_for("customers_page"))
+        return render_template("events.html", page="customers", site_id=site_id,
+                               site=site, page_sub="events",
+                               theme=settings.get("default_theme"))
+
+    @app.route("/sites/<int:site_id>/heatmap")
+    @login_required
+    def site_heatmap_page(site_id):
+        site = database.get_site(site_id)
+        if not site:
+            return redirect(url_for("customers_page"))
+        return render_template("heatmap.html", page="customers", site_id=site_id,
+                               site=site, page_sub="heatmap",
+                               theme=settings.get("default_theme"))
+
+    @app.route("/sites/<int:site_id>/sla")
+    @login_required
+    def site_sla_page(site_id):
+        site = database.get_site(site_id)
+        if not site:
+            return redirect(url_for("customers_page"))
+        return render_template("sla.html", page="customers", site_id=site_id,
+                               site=site, page_sub="sla",
                                theme=settings.get("default_theme"))
 
     # ---------------- API: customers / sites ----------------
@@ -804,6 +836,17 @@ def register_routes(app):
                        crit_ms=settings.get("crit_ms"),
                        jitter_warn=settings.get("jitter_warn_ms"))
 
+    def _view_scope():
+        """Which devices a top-level view covers. No ?site → hub-local only
+        (site_id=None); ?site=<id> → that site's devices."""
+        sid = request.args.get("site")
+        if sid:
+            try:
+                return int(sid)
+            except (TypeError, ValueError):
+                pass
+        return None
+
     @app.route("/api/sla")
     @login_required
     def api_sla():
@@ -813,8 +856,8 @@ def register_routes(app):
             days = 30
         end = time.time()
         start = end - days * 86400
-        rows = database.sla_report(start, end,
-                                   settings.get("warn_ms"), settings.get("crit_ms"))
+        rows = database.sla_report(start, end, settings.get("warn_ms"),
+                                   settings.get("crit_ms"), site_id=_view_scope())
         return jsonify(start=start, end=end, days=days, devices=rows)
 
     @app.route("/api/sla.csv")
@@ -826,8 +869,8 @@ def register_routes(app):
             days = 30
         end = time.time()
         start = end - days * 86400
-        rows = database.sla_report(start, end,
-                                   settings.get("warn_ms"), settings.get("crit_ms"))
+        rows = database.sla_report(start, end, settings.get("warn_ms"),
+                                   settings.get("crit_ms"), site_id=_view_scope())
         lines = ["device,host,uptime_pct,downtime_seconds,outages,pings_sent,"
                  "loss_pct,avg_ms,max_ms,jitter_ms,warnings,criticals"]
         for r in rows:
@@ -850,7 +893,7 @@ def register_routes(app):
             limit = max(1, min(1000, int(request.args.get("limit", 200))))
         except ValueError:
             limit = 200
-        return jsonify(events=database.list_events(limit=limit))
+        return jsonify(events=database.list_events(limit=limit, site_id=_view_scope()))
 
     # ---------------- API: settings & email ----------------
 

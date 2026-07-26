@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="page-title">Time-of-day heatmap</h1>
+{% if site_id %}{% include "_site_subnav.html" %}{% endif %}
+<h1 class="page-title">Time-of-day heatmap{% if site_id %} — {{ site.name }}{% endif %}</h1>
 <div class="card">
   <h2>Find recurring patterns</h2>
   <p class="card-sub">Each cell is one hour of one day. Dark cells are worse.
@@ -32,6 +33,7 @@
 <script>
 (function () {
   "use strict";
+  const SITE = {{ site_id or 0 }};
   // sequential blue ramp, light -> dark (one hue = magnitude)
   const RAMP = ["#cde2fb","#b7d3f6","#9ec5f4","#86b6ef","#6da7ec","#5598e7",
                 "#3987e5","#2a78d6","#256abf","#1c5cab","#184f95","#104281","#0d366b"];
@@ -40,7 +42,8 @@
   const NAMES = {2: "avg latency", 3: "max latency", 4: "loss", 5: "jitter"};
 
   async function loadDevices() {
-    const data = await api("/api/devices");
+    // top-level: hub-local devices; site view: that site's devices
+    const data = SITE ? await api("/api/sites/" + SITE) : await api("/api/devices");
     const sel = document.getElementById("hm-device");
     sel.innerHTML = "";
     for (const d of data.devices) {
