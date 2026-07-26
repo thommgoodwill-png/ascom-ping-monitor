@@ -82,7 +82,7 @@
     <div id="fp-palette" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;"></div>
   </div>
 
-  <div id="fp-plans" style="margin-top:14px;display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start;"></div>
+  <div id="fp-plans" style="margin-top:14px;display:flex;flex-direction:column;gap:22px;"></div>
   <div id="fp-empty" class="muted" style="display:none;padding:24px 0;">
     No floor plans yet. Click <b>Edit layout</b> to upload one and place your devices on it.
   </div>
@@ -97,11 +97,11 @@
 </div>
 
 <style>
-.fp-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:10px; }
+.fp-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:10px; width:100%; }
 .fp-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
 .fp-head .name { font-weight:600; }
-.fp-stage { position:relative; display:inline-block; line-height:0; border-radius:6px; overflow:hidden; }
-.fp-stage img { display:block; max-width:520px; max-height:520px; width:auto; height:auto; }
+.fp-stage { position:relative; display:block; width:100%; line-height:0; border-radius:6px; overflow:hidden; }
+.fp-stage img { display:block; width:100%; height:auto; max-width:none; }
 .fp-stage canvas.fp-heat { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
 .fp-pin { position:absolute; transform:translate(-50%,-50%); z-index:3; }
 .fp-dot { width:16px; height:16px; border-radius:50%; border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.5); cursor:default; }
