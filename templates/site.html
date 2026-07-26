@@ -1,5 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+  #device-grid .card .dev-head { position:relative; }
+  #device-grid .drag-grip { cursor:grab; color:var(--muted); font-size:16px; user-select:none;
+    margin-right:6px; }
+  #device-grid .drag-grip:active { cursor:grabbing; }
+  #device-grid .card.dragging { opacity:.5; outline:2px dashed var(--s1); }
+</style>
 {% include "_site_subnav.html" %}
 <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
   <h1 class="page-title" id="site-title" style="margin:0;">Site</h1>
@@ -53,7 +60,24 @@
   "use strict";
   const SID = {{ site_id }};
   let rangeSec = 3600, overview = null;
+  let dragging = false, dragCard = null;
   const miniCharts = new Map();
+
+  // which card to drop before (row-major), or null to append at the end
+  function cardAfter(container, x, y) {
+    for (const c of container.querySelectorAll(".card:not(.dragging)")) {
+      const b = c.getBoundingClientRect();
+      if (y < b.top + b.height / 2) return c;
+      if (y < b.bottom && x < b.left + b.width / 2) return c;
+    }
+    return null;
+  }
+  async function saveOrder() {
+    const grid = document.getElementById("device-grid");
+    const ids = [...grid.querySelectorAll(".card")].map(c => c.dataset.id).filter(Boolean);
+    try { await api("/api/devices/reorder", { method: "POST", body: JSON.stringify({ ids }) }); }
+    catch (e) { toast(e.message, true); }
+  }
 
   function pillFor(d, warn, crit) {
     if (!d.enabled) return ["disabled", "○ Disabled"];
@@ -89,10 +113,21 @@
       let card = document.getElementById("dev-"+d.id);
       if (!card) {
         card = document.createElement("div"); card.className="card"; card.id="dev-"+d.id;
-        card.innerHTML = '<div class="dev-head"><span class="pill unknown"></span>'+
+        card.dataset.id = d.id;
+        card.innerHTML = '<div class="dev-head">'+
+          '<span class="drag-grip" draggable="true" title="Drag to reorder">⠿</span>'+
+          '<span class="pill unknown"></span>'+
           '<span class="name"></span><span class="host"></span></div>'+
           '<div class="stats"></div><div class="mini-chart"></div>';
         grid.appendChild(card);
+        const grip = card.querySelector(".drag-grip"), theCard = card;
+        grip.addEventListener("dragstart", e => {
+          dragCard = theCard; dragging = true; theCard.classList.add("dragging");
+          e.dataTransfer.effectAllowed = "move";
+        });
+        grip.addEventListener("dragend", () => {
+          theCard.classList.remove("dragging"); dragging = false; dragCard = null; saveOrder();
+        });
       }
       const [cls,label] = pillFor(d, data.warn_ms, data.crit_ms);
       const p = card.querySelector(".pill"); p.className="pill "+cls; p.textContent=label;
@@ -108,6 +143,10 @@
     }
     const ids = new Set(data.devices.map(d=>"dev-"+d.id));
     for (const el of Array.from(grid.children)) if (!ids.has(el.id)) el.remove();
+    // reflect the saved order (skip while a drag is in progress)
+    if (!dragging) for (const d of data.devices) {
+      const card = document.getElementById("dev-"+d.id); if (card) grid.appendChild(card);
+    }
     return data;
   }
 
@@ -136,7 +175,14 @@
     for (const [id,ch] of miniCharts) if(!devs.find(d=>d.id===id)){ch.destroy();miniCharts.delete(id);}
   }
 
-  async function refresh(){ try{ await loadDevices(); await loadHistory(); }catch(e){ if(e.message!=="auth") toast(e.message,true);} }
+  async function refresh(){ if(dragging) return; try{ await loadDevices(); await loadHistory(); }catch(e){ if(e.message!=="auth") toast(e.message,true);} }
+
+  document.getElementById("device-grid").addEventListener("dragover", e=>{
+    if(!dragCard) return; e.preventDefault(); e.dataTransfer.dropEffect="move";
+    const after=cardAfter(e.currentTarget, e.clientX, e.clientY);
+    if(after==null) e.currentTarget.appendChild(dragCard);
+    else e.currentTarget.insertBefore(dragCard, after);
+  });
 
   document.getElementById("range-group").addEventListener("click", ev=>{
     const b=ev.target.closest(".range-btn"); if(!b) return;
