@@ -68,6 +68,18 @@ class Webhooks:
                         dev.get("ip", "?"), dev.get("mac", "?"),
                         f"new MAC seen{v} — acknowledge on the Tools page if expected")
 
+    def imt_failed(self, name, ident, detail):
+        if settings.get("imt_alert"):
+            self._event("critical", "✖ IMT DEVICE FAILED", name, ident, detail)
+
+    def imt_recovered(self, name, ident, detail):
+        if settings.get("imt_alert"):
+            self._event("good", "✔ IMT DEVICE RECOVERED", name, ident, detail)
+
+    def imt_call(self, name, ident, detail):
+        # only reached when imt_emergency_alert is on (checked by the caller)
+        self._event("critical", "🔔 EMERGENCY CALL", name, ident, detail)
+
     def send_test(self):
         """Synchronous test send so the GUI can report the real result."""
         url = settings.get("wh_url").strip()

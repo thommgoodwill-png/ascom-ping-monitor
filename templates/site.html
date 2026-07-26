@@ -5,7 +5,9 @@
   #device-grid .drag-grip { cursor:grab; color:var(--muted); font-size:16px; user-select:none;
     margin-right:6px; }
   #device-grid .drag-grip:active { cursor:grabbing; }
-  #device-grid .card.dragging { opacity:.5; outline:2px dashed var(--s1); }
+  #device-grid .card.drag-hidden { display:none; }
+  #device-grid .drag-ph { border:2px dashed var(--s1); background:var(--surface-2);
+    box-shadow:none; opacity:.7; }
 </style>
 {% include "_site_subnav.html" %}
 <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -60,21 +62,27 @@
   "use strict";
   const SID = {{ site_id }};
   let rangeSec = 3600, overview = null;
-  let dragging = false, dragCard = null;
+  let dragging = false, dragCard = null, ph = null;
   const miniCharts = new Map();
 
-  // which card to drop before (row-major), or null to append at the end
-  function cardAfter(container, x, y) {
-    for (const c of container.querySelectorAll(".card:not(.dragging)")) {
+  // The card the placeholder should sit BEFORE (or null = append at the end).
+  // Uses closest-centre with a slight vertical bias so grid rows are respected.
+  function dropRef(container, x, y) {
+    const cards = [...container.querySelectorAll(".card:not(.drag-ph):not(.drag-hidden)")];
+    let best = null, bestD = Infinity, before = true;
+    for (const c of cards) {
       const b = c.getBoundingClientRect();
-      if (y < b.top + b.height / 2) return c;
-      if (y < b.bottom && x < b.left + b.width / 2) return c;
+      const cx = b.left + b.width / 2, cy = b.top + b.height / 2, dy = y - cy;
+      const d = Math.hypot(x - cx, dy * 1.4);
+      if (d < bestD) { bestD = d; best = c;
+        before = (Math.abs(dy) > b.height / 2) ? (dy < 0) : (x < cx); }
     }
-    return null;
+    if (!best) return null;
+    return before ? best : best.nextElementSibling;
   }
   async function saveOrder() {
     const grid = document.getElementById("device-grid");
-    const ids = [...grid.querySelectorAll(".card")].map(c => c.dataset.id).filter(Boolean);
+    const ids = [...grid.querySelectorAll(".card:not(.drag-ph)")].map(c => c.dataset.id).filter(Boolean);
     try { await api("/api/devices/reorder", { method: "POST", body: JSON.stringify({ ids }) }); }
     catch (e) { toast(e.message, true); }
   }
@@ -122,11 +130,21 @@
         grid.appendChild(card);
         const grip = card.querySelector(".drag-grip"), theCard = card;
         grip.addEventListener("dragstart", e => {
-          dragCard = theCard; dragging = true; theCard.classList.add("dragging");
+          dragCard = theCard; dragging = true;
           e.dataTransfer.effectAllowed = "move";
+          try { e.dataTransfer.setData("text/plain", theCard.dataset.id); } catch (_) {}
+          // placeholder keeps the grid slot the same size so nothing reflows
+          ph = document.createElement("div"); ph.className = "card drag-ph";
+          ph.style.minHeight = theCard.offsetHeight + "px";
+          theCard.parentNode.insertBefore(ph, theCard);
+          // pull the real card out of flow (next frame, so the drag image is kept)
+          setTimeout(() => theCard.classList.add("drag-hidden"), 0);
         });
         grip.addEventListener("dragend", () => {
-          theCard.classList.remove("dragging"); dragging = false; dragCard = null; saveOrder();
+          if (ph) { ph.parentNode.insertBefore(theCard, ph); ph.remove(); ph = null; }
+          theCard.classList.remove("drag-hidden");
+          dragging = false; dragCard = null;
+          saveOrder();
         });
       }
       const [cls,label] = pillFor(d, data.warn_ms, data.crit_ms);
@@ -178,10 +196,10 @@
   async function refresh(){ if(dragging) return; try{ await loadDevices(); await loadHistory(); }catch(e){ if(e.message!=="auth") toast(e.message,true);} }
 
   document.getElementById("device-grid").addEventListener("dragover", e=>{
-    if(!dragCard) return; e.preventDefault(); e.dataTransfer.dropEffect="move";
-    const after=cardAfter(e.currentTarget, e.clientX, e.clientY);
-    if(after==null) e.currentTarget.appendChild(dragCard);
-    else e.currentTarget.insertBefore(dragCard, after);
+    if(!ph) return; e.preventDefault(); e.dataTransfer.dropEffect="move";
+    const grid=e.currentTarget, ref=dropRef(grid, e.clientX, e.clientY);
+    if(ref==null){ if(grid.lastElementChild!==ph) grid.appendChild(ph); }
+    else if(ref!==ph && ph.nextElementSibling!==ref) grid.insertBefore(ph, ref);
   });
 
   document.getElementById("range-group").addEventListener("click", ev=>{

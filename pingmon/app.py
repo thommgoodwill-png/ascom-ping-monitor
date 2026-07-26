@@ -24,6 +24,11 @@ webhooks = Webhooks()
 monitor = Monitor(emailer, webhooks)
 from .agent import Agent  # noqa: E402
 agent = Agent(monitor)
+from .feed import CallFeed  # noqa: E402
+feed = CallFeed()
+from .imtbridge import ImtBridge  # noqa: E402
+imt = ImtBridge(webhooks, feed)
+from . import teldb  # noqa: E402
 
 
 def _secret_key():
@@ -126,6 +131,8 @@ def create_app():
     emailer.start()
     webhooks.start()
     agent.start()
+    feed.start()
+    imt.start()
     register_routes(app)
     return app
 
@@ -260,6 +267,7 @@ def register_routes(app):
                 emailer.stop()
                 webhooks.stop()
                 agent.stop()
+                imt.stop()
             except Exception:
                 pass
             os._exit(0)   # hard exit — reliably stops waitress on every OS
@@ -286,10 +294,26 @@ def register_routes(app):
         return render_template("events.html", page="events",
                                theme=settings.get("default_theme"))
 
+    # Settings are split across two pages: the network-monitoring settings live
+    # under Network Monitoring → Settings, and the shared/account settings stay
+    # on the top-level Settings tab.
+    NET_SETTINGS = ["monitoring", "problem", "discovery", "maintenance",
+                    "failure_alerts", "reports", "capture"]
+    GEN_SETTINGS = ["email", "access", "agent", "webhooks", "interface"]
+
     @app.route("/settings")
     @login_required
     def settings_page():
         return render_template("settings.html", page="settings",
+                               settings_title="Settings", sections=GEN_SETTINGS,
+                               theme=settings.get("default_theme"))
+
+    @app.route("/network/settings")
+    @login_required
+    def network_settings_page():
+        return render_template("settings.html", page="network_settings",
+                               settings_title="Network monitoring settings",
+                               sections=NET_SETTINGS,
                                theme=settings.get("default_theme"))
 
     @app.route("/users")
@@ -1097,6 +1121,297 @@ def register_routes(app):
                                  "drops": drops}
         return jsonify(now=now, start=start, seconds=seconds, devices=out)
 
+    # ---------------- IMT bridge ----------------
+
+    @app.route("/telligence")
+    @login_required
+    def telligence_page():
+        return render_template("imt.html", page="telligence", site_id=None,
+                               site=None, theme=settings.get("default_theme"))
+
+    @app.route("/imt")
+    @login_required
+    def imt_page():          # legacy path — keep old links/bookmarks working
+        return redirect(url_for("telligence_page"))
+
+    @app.route("/telligence/settings")
+    @admin_required
+    def telligence_settings_page():
+        return render_template("imt_settings.html", page="telligence_settings",
+                               theme=settings.get("default_theme"))
+
+    @app.route("/sites/<int:site_id>/imt")
+    @login_required
+    def site_imt_page(site_id):
+        site = database.get_site(site_id)
+        if not site:
+            return redirect(url_for("customers_page"))
+        return render_template("imt.html", page="customers", site_id=site_id,
+                               site=site, page_sub="imt",
+                               theme=settings.get("default_theme"))
+
+    IMT_KEYS = ["imt_enabled", "imt_db_path", "imt_log_path", "imt_config_db_path",
+                "imt_poll_secs", "imt_alert", "imt_emergency_alert",
+                "imt_service_check", "imt_service_stale_secs", "imt_service_name"]
+
+    @app.route("/api/imt/config")
+    @login_required
+    def api_imt_config():
+        # config is for THIS instance's local reader (a site configures its own
+        # bridge on its own agent), so it's global — not site-scoped.
+        return jsonify(config={k: settings.get(k) for k in IMT_KEYS})
+
+    @app.route("/api/imt/config", methods=["POST"])
+    @admin_required
+    def api_imt_config_set():
+        data = request.get_json(force=True) or {}
+        clean = {k: v for k, v in data.items() if k in IMT_KEYS}
+        applied = settings.update(clean)
+        return jsonify(applied=applied)
+
+    def _duty_for(loc_string, duties):
+        """Longest duty-area whose path is a prefix of loc_string (segment-aware)."""
+        if not loc_string:
+            return None
+        best = None
+        for d in duties:
+            ds = d["string"]
+            if ds and (loc_string == ds or loc_string.startswith(ds + "-")):
+                if best is None or len(ds) > len(best["string"]):
+                    best = d
+        return best
+
+    @app.route("/api/imt/calls")
+    @login_required
+    def api_imt_calls():
+        scope = _view_scope()
+        duties = database.imt_duty_areas(scope)
+
+        def attach(items):
+            for it in items:
+                it["duty"] = _duty_for(it.get("location_string"), duties)
+            return items
+
+        active = attach(database.imt_list_active_calls(scope))
+        faults = attach([d for d in database.imt_list_devices(scope)
+                         if d["status"] == "failed"])
+        return jsonify(active=active, faults=faults,
+                       recent=database.imt_list_recent_calls(scope, limit=100),
+                       duty_areas=duties, counts=database.imt_call_counts(scope))
+
+    @app.route("/api/imt/fault-devices")
+    @login_required
+    def api_imt_fault_devices():
+        """The specific devices behind a faulted room (drill-down). Reads the
+        bridge DB + Telligence config cache on the reading instance."""
+        from . import imtbridge as _ib
+        ident = request.args.get("ident", "")
+        if _view_scope() is not None:
+            return jsonify(remote=True)   # config cache lives on the site's agent
+        cfg = _ib.load_cfg()
+        try:
+            return jsonify(_ib.read_fault_devices(
+                cfg["db_path"], cfg["config_db_path"], ident))
+        except Exception as e:
+            return jsonify(error=f"{type(e).__name__}: {e}"), 400
+
+    @app.route("/api/imt/status")
+    @login_required
+    def api_imt_status():
+        scope = _view_scope()
+        counts = database.imt_counts(scope)
+        counts["calls"] = database.imt_call_counts(scope)
+        if scope is None:
+            # local reader — live status straight off the reader thread
+            return jsonify(status=imt.status(), counts=counts, scope="local")
+        # a site — status derived from what the site's agent has pushed up
+        site = database.get_site(scope)
+        evs = database.imt_list_events(scope, limit=1)
+        st = {
+            "enabled": True,
+            "configured": counts["total"] > 0,
+            "connected": bool(site and site.get("last_seen")),
+            "last_error": None,
+            "event_count": None,
+            "last_event_ts": evs[0]["ts"] if evs else None,
+            "last_poll_ts": site.get("last_seen") if site else None,
+            "remote": True,
+            "agent_host": site.get("agent_host") if site else None,
+        }
+        return jsonify(status=st, counts=counts, scope="site")
+
+    @app.route("/api/imt/devices")
+    @login_required
+    def api_imt_devices():
+        return jsonify(devices=database.imt_list_devices(_view_scope()))
+
+    @app.route("/api/imt/messages")
+    @login_required
+    def api_imt_messages():
+        # the raw log feed only exists on the instance doing the reading
+        if _view_scope() is not None:
+            return jsonify(messages=[], remote=True)
+        return jsonify(messages=imt.recent_messages())
+
+    @app.route("/api/imt/events")
+    @login_required
+    def api_imt_events():
+        return jsonify(events=database.imt_list_events(_view_scope(), limit=200))
+
+    @app.route("/api/imt/test", methods=["POST"])
+    @login_required
+    def api_imt_test():
+        try:
+            return jsonify(result=imt.test_connection())
+        except Exception as e:
+            return jsonify(error=f"{type(e).__name__}: {e}"), 400
+
+    @app.route("/api/imt/clear", methods=["POST"])
+    @admin_required
+    def api_imt_clear():
+        database.imt_clear_devices(_view_scope())
+        return jsonify(ok=True)
+
+    @app.route("/api/imt/debug")
+    @admin_required
+    def api_imt_debug():
+        """Live, unfiltered readout of what the reader sees in the bridge DB —
+        so a fault that isn't surfacing can be diagnosed without guessing."""
+        from . import imtbridge as _ib
+        cfg = _ib.load_cfg()
+        out = {"reader_version": _ib.READER_VERSION, "db_path": cfg["db_path"],
+               "db_exists": bool(cfg["db_path"]) and os.path.exists(cfg["db_path"])}
+        # is there a WAL sidecar right now, and how big?
+        if out["db_exists"]:
+            wal = cfg["db_path"] + "-wal"
+            out["wal_exists"] = os.path.exists(wal)
+            out["wal_bytes"] = os.path.getsize(wal) if out["wal_exists"] else 0
+            try:
+                out["located_faults"] = _ib.read_db_faults(cfg["db_path"])
+            except Exception as e:
+                out["read_db_faults_error"] = f"{type(e).__name__}: {e}"
+            # raw dumps of BOTH active-event tables (all rows, unfiltered) so a
+            # fault that isn't surfacing can be located precisely
+            try:
+                con, tmp = _ib._snapshot_connect(cfg["db_path"])
+                try:
+                    out["active_event_rows"] = [dict(r) for r in con.execute(
+                        "SELECT EventText, EventString, LocationString, "
+                        "LocationText, TimeOccurred FROM ActiveEventData")]
+                    try:
+                        out["active_full_rows"] = [dict(r) for r in con.execute(
+                            "SELECT EventText, LocationString, LocationText, "
+                            "LocationId, EventCategory, State, Status, "
+                            "TimeOccurred FROM ActiveFullEvent")]
+                    except Exception as e:
+                        out["active_full_error"] = f"{type(e).__name__}: {e}"
+                finally:
+                    _ib._snapshot_close(con, tmp)
+            except Exception as e:
+                out["active_event_error"] = f"{type(e).__name__}: {e}"
+        # the log is the authoritative fault source — surface its recent located
+        # fault transitions so a live fault can be confirmed there directly
+        try:
+            out["log_faults"] = _ib.tail_fault_lines(cfg["log_path"])
+        except Exception as e:
+            out["log_faults_error"] = f"{type(e).__name__}: {e}"
+        return jsonify(out)
+
+    # ---------------- ASCII call feed (dutyarea|position|location|callstate) ------
+
+    FEED_KEYS = ["feed_enabled", "feed_mode", "feed_host", "feed_port",
+                 "feed_eol", "feed_clear_text", "feed_heartbeat_enabled",
+                 "feed_heartbeat_secs", "feed_heartbeat_text"]
+
+    @app.route("/api/feed/config")
+    @admin_required
+    def api_feed_config():
+        return jsonify(config={k: settings.get(k) for k in FEED_KEYS})
+
+    @app.route("/api/feed/config", methods=["POST"])
+    @admin_required
+    def api_feed_config_save():
+        data = request.get_json(force=True, silent=True) or {}
+        settings.update({k: data[k] for k in FEED_KEYS if k in data})
+        return jsonify(config={k: settings.get(k) for k in FEED_KEYS})
+
+    @app.route("/api/feed/status")
+    @admin_required
+    def api_feed_status():
+        return jsonify(status=feed.status())
+
+    @app.route("/api/feed/test", methods=["POST"])
+    @admin_required
+    def api_feed_test():
+        try:
+            return jsonify(result=feed.send_test())
+        except Exception as e:
+            return jsonify(error=f"{type(e).__name__}: {e}"), 400
+
+    # ---------------- Telligence config DB (device type / serial) ----------------
+
+    TELDB_KEYS = ["tel_db_enabled", "tel_db_host", "tel_db_instance",
+                  "tel_db_port", "tel_db_name", "tel_db_auth", "tel_db_user",
+                  "tel_db_password"]
+
+    @app.route("/api/teldb/config")
+    @admin_required
+    def api_teldb_config():
+        cfg = {k: settings.get(k) for k in TELDB_KEYS}
+        cfg["tel_db_password"] = "********" if cfg["tel_db_password"] else ""
+        cfg["_drivers"] = teldb.drivers_available()
+        return jsonify(config=cfg)
+
+    @app.route("/api/teldb/config", methods=["POST"])
+    @admin_required
+    def api_teldb_config_set():
+        data = request.get_json(force=True) or {}
+        if data.get("tel_db_password") == "********":
+            data.pop("tel_db_password", None)
+        clean = {k: v for k, v in data.items() if k in TELDB_KEYS}
+        return jsonify(applied=settings.update(clean))
+
+    @app.route("/api/teldb/test", methods=["POST"])
+    @admin_required
+    def api_teldb_test():
+        try:
+            return jsonify(result=teldb.test_connection())
+        except Exception as e:
+            return jsonify(error=f"{type(e).__name__}: {e}"), 400
+
+    @app.route("/api/teldb/tables")
+    @admin_required
+    def api_teldb_tables():
+        try:
+            return jsonify(tables=teldb.list_tables())
+        except Exception as e:
+            return jsonify(error=f"{type(e).__name__}: {e}"), 400
+
+    @app.route("/api/teldb/columns")
+    @admin_required
+    def api_teldb_columns():
+        try:
+            return jsonify(columns=teldb.describe_table(request.args.get("table", "")))
+        except Exception as e:
+            return jsonify(error=f"{type(e).__name__}: {e}"), 400
+
+    @app.route("/api/teldb/sample")
+    @admin_required
+    def api_teldb_sample():
+        try:
+            return jsonify(rows=teldb.sample_table(request.args.get("table", ""),
+                                                   request.args.get("limit", 20)))
+        except Exception as e:
+            return jsonify(error=f"{type(e).__name__}: {e}"), 400
+
+    @app.route("/api/teldb/search")
+    @admin_required
+    def api_teldb_search():
+        try:
+            return jsonify(hits=teldb.search_columns(request.args.get("term", "")))
+        except Exception as e:
+            return jsonify(error=f"{type(e).__name__}: {e}"), 400
+
     # ---------------- API: settings & email ----------------
 
     @app.route("/api/settings", methods=["GET"])
@@ -1106,6 +1421,7 @@ def register_routes(app):
         vals["gmail_app_password"] = "********" if vals["gmail_app_password"] else ""
         # webhook URLs embed a secret token — mask it
         vals["wh_url"] = "********" if vals["wh_url"] else ""
+        vals["tel_db_password"] = "********" if vals["tel_db_password"] else ""
         return jsonify(settings=vals,
                        email_last_error=emailer.last_error,
                        email_last_sent=emailer.last_sent,
@@ -1123,6 +1439,8 @@ def register_routes(app):
             data.pop("gmail_app_password")
         if data.get("wh_url") == "********":
             data.pop("wh_url")
+        if data.get("tel_db_password") == "********":
+            data.pop("tel_db_password")
         # admin-only settings can't be changed by standard users
         if session.get("role") != "admin":
             for k in ADMIN_ONLY_SETTINGS:

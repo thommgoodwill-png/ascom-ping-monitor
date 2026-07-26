@@ -17,7 +17,7 @@ from . import database, settings
 
 log = logging.getLogger("pingmon.agent")
 
-AGENT_VERSION = "1.3"   # 1.3 = skip stale backlog on (re)connect
+AGENT_VERSION = "1.4"   # 1.4 = also push IMT bridge faults up to the hub
 # When (re)connecting with a big unsent backlog, only push pings from the last
 # this-many seconds; older queued pings are skipped rather than replayed.
 BACKFILL_WINDOW = 900   # 15 minutes
@@ -136,6 +136,10 @@ class Agent:
             except Exception as e:
                 self.last_error = f"{type(e).__name__}: {e}"
                 log.warning("agent cycle failed: %s", e)
+            try:
+                self._push_imt(c)         # push IMT bridge faults UP to the hub
+            except Exception as e:
+                log.warning("agent IMT push failed: %s", e)
             self._stop.wait(max(10, c["interval"]))
 
     def _hostname(self):
@@ -205,6 +209,46 @@ class Agent:
                 database.update_device(new_id, hub_id=hub_id, from_hub=1, **{
                     k: v for k, v in fields.items()
                     if k in ("warn_override", "crit_override", "tcp_ports", "check_url")})
+
+    def _push_imt(self, c):
+        """Push the IMT bridge faults this agent read locally up to the hub, so
+        they appear under this site on the controller. The agent's own IMT
+        reader (running against the site's local ImtBridgeDb.db3 + log) fills the
+        local imt_devices/imt_events tables at site_id=None; we mirror that
+        snapshot up. Sends only when there's something to send."""
+        devices = database.imt_list_devices(None)
+        st = _load_state()
+        wm = st.get("imt_event_wm", 0)
+        events = database.imt_events_after(None, wm, limit=1000)
+        has_calls = database.imt_call_counts(None)["active"] > 0 or \
+            bool(database.imt_list_recent_calls(None, limit=1))
+        if not devices and not events and not has_calls:
+            return
+        dev_out = [{"ident": d["ident"], "name": d["name"], "status": d["status"],
+                    "detail": d["detail"], "location_text": d["location_text"],
+                    "location_string": d["location_string"],
+                    "location_id": d["location_id"], "system_ip": d["system_ip"],
+                    "kind": d["kind"], "last_change": d["last_change"]}
+                   for d in devices]
+        ev_out = [{"ident": e["ident"], "name": e["name"], "status": e["status"],
+                   "detail": e["detail"], "ts": e["ts"]} for e in events]
+        # live calls: send the full active set + a slice of recent history
+        active = database.imt_list_active_calls(None)
+        recent = database.imt_list_recent_calls(None, limit=50)
+        history = [c for c in recent if c["state"] == "cleared"]
+        call_cols = ("guid", "code", "event_text", "category", "priority",
+                     "location_string", "location_text", "location_id", "name",
+                     "raised_ts", "cleared_ts", "raw")
+        ca_out = [{k: c[k] for k in call_cols} for c in active]
+        ch_out = [{k: c[k] for k in call_cols} for c in history]
+        _post(f"{c['hub_url']}/agent/v1/imt", c["site_key"],
+              {"version": AGENT_VERSION, "host": self._hostname(),
+               "devices": dev_out, "events": ev_out,
+               "calls_active": ca_out, "calls_history": ch_out})
+        if events:
+            st = _load_state()
+            st["imt_event_wm"] = max(e["id"] for e in events)
+            _save_state(st)
 
     def _build_diag(self, st):
         """A small self-report the hub can display, so a remote agent can be

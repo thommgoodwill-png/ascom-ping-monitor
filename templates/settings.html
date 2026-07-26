@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="page-title">Settings</h1>
+{% set sections = sections if sections is defined else ['monitoring','problem','discovery','maintenance','email','access','agent','webhooks','reports','failure_alerts','capture','interface'] %}
+<h1 class="page-title">{{ settings_title if settings_title is defined else 'Settings' }}</h1>
 
+{% if 'monitoring' in sections %}
 <div class="card">
   <h2>Monitoring</h2>
   <p class="card-sub">Global ping engine options. Everything can be switched on or off.</p>
@@ -55,7 +57,9 @@
     </div>
   </div>
 </div>
+{% endif %}
 
+{% if 'problem' in sections %}
 <div class="card">
   <h2>Problem detection</h2>
   <p class="card-sub">Catches degradation that never takes a device fully down.</p>
@@ -82,7 +86,9 @@
     </div>
   </div>
 </div>
+{% endif %}
 
+{% if 'discovery' in sections %}
 <div class="card">
   <h2>Device discovery &amp; rogue alerts</h2>
   <p class="card-sub">Periodically sweeps the subnet, remembers every MAC, and emails
@@ -125,7 +131,9 @@
     </div>
   </div>
 </div>
+{% endif %}
 
+{% if 'maintenance' in sections %}
 <div class="card">
   <h2>Maintenance window</h2>
   <p class="card-sub">A daily quiet period — pings keep logging, but <b>all alert emails are suppressed</b> so backups and reboots don't page anyone. The wallboard shows a 🔧 badge while active.</p>
@@ -145,7 +153,9 @@
     </div>
   </div>
 </div>
+{% endif %}
 
+{% if 'email' in sections %}
 <div class="card">
   <h2>Email — Gmail</h2>
   <p class="card-sub">Uses your Gmail account over SMTP. You need a Google <b>app password</b>
@@ -175,8 +185,9 @@
     <span class="muted" id="email-status" style="align-self:center;"></span>
   </div>
 </div>
+{% endif %}
 
-{% if is_admin %}
+{% if 'access' in sections and is_admin %}
 <div class="card">
   <h2>Access control <span class="muted">(admin only)</span></h2>
   <p class="card-sub">Restrict who can sign in and enforce two-factor authentication.</p>
@@ -197,6 +208,7 @@
 </div>
 {% endif %}
 
+{% if 'agent' in sections %}
 <div class="card">
   <h2>Central hub — agent mode</h2>
   <p class="card-sub">Turn this installation into a <b>remote agent</b> for a central hub.
@@ -229,7 +241,9 @@
     <span class="muted" id="agent-status" style="align-self:center;"></span>
   </div>
 </div>
+{% endif %}
 
+{% if 'webhooks' in sections %}
 <div class="card">
   <h2>Webhooks — Teams / Discord / Slack</h2>
   <p class="card-sub">Posts alerts to a chat channel. Paste an <b>Incoming Webhook</b>
@@ -286,7 +300,9 @@
     Discord → channel settings → Integrations → Webhooks → New. Slack → add the
     Incoming Webhooks app and pick a channel.</p>
 </div>
+{% endif %}
 
+{% if 'reports' in sections %}
 <div class="card">
   <h2>Scheduled reports</h2>
   <p class="card-sub">Rolling reports — each covers the period since it last went out.
@@ -324,7 +340,9 @@
     <button class="btn small" data-report="24">Send 24 h report now</button>
   </div>
 </div>
+{% endif %}
 
+{% if 'failure_alerts' in sections %}
 <div class="card">
   <h2>Failure alerts</h2>
   <p class="card-sub">Immediate emails when a device changes state.</p>
@@ -346,7 +364,9 @@
     </div>
   </div>
 </div>
+{% endif %}
 
+{% if 'capture' in sections %}
 <div class="card">
   <h2>Packet capture</h2>
   <p class="card-sub">Runs <code>tcpdump</code> on demand and saves a Wireshark-compatible
@@ -369,7 +389,9 @@
     </div>
   </div>
 </div>
+{% endif %}
 
+{% if 'interface' in sections %}
 <div class="card">
   <h2>Interface</h2>
   <div class="f-row">
@@ -394,6 +416,7 @@
     </div>
   </div>
 </div>
+{% endif %}
 
 <div style="display:flex;gap:10px;align-items:center;position:sticky;bottom:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);padding:10px 14px;width:fit-content;">
   <button class="btn primary" id="save-btn">Save settings</button>
@@ -416,15 +439,15 @@
       else el.value = s[k];
     }
     const es = document.getElementById("email-status");
-    if (data.email_last_error) {
+    if (es && data.email_last_error) {
       es.textContent = "Last email error: " + data.email_last_error;
       es.style.color = "var(--crit-text)";
-    } else if (data.email_last_sent) {
+    } else if (es && data.email_last_sent) {
       es.textContent = "Last email sent " + new Date(data.email_last_sent * 1000).toLocaleString();
       es.style.color = "var(--good-text)";
     }
-    // agent-mode config (separate store)
-    try {
+    // agent-mode config (separate store) — only on the page that shows it
+    if (document.getElementById("agent-enabled")) try {
       const ag = await api("/api/agent");
       document.getElementById("agent-enabled").checked = !!ag.config.enabled;
       document.getElementById("agent-hub").value = ag.config.hub_url || "";
@@ -454,13 +477,15 @@
     }
     try {
       await api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
-      // save agent-mode config too
-      await api("/api/agent", { method: "POST", body: JSON.stringify({
-        enabled: document.getElementById("agent-enabled").checked,
-        hub_url: document.getElementById("agent-hub").value.trim(),
-        site_key: document.getElementById("agent-key").value.trim(),
-        interval: parseInt(document.getElementById("agent-interval").value, 10) || 30,
-      }) });
+      // save agent-mode config too (only if that section is on this page)
+      if (document.getElementById("agent-enabled")) {
+        await api("/api/agent", { method: "POST", body: JSON.stringify({
+          enabled: document.getElementById("agent-enabled").checked,
+          hub_url: document.getElementById("agent-hub").value.trim(),
+          site_key: document.getElementById("agent-key").value.trim(),
+          interval: parseInt(document.getElementById("agent-interval").value, 10) || 30,
+        }) });
+      }
       toast("Settings saved");
       document.getElementById("save-note").textContent =
         "Saved " + new Date().toLocaleTimeString();
@@ -468,7 +493,8 @@
     } catch (e) { toast("Save failed: " + e.message, true); }
   });
 
-  document.getElementById("agent-test").addEventListener("click", async ev => {
+  const agentTestBtn = document.getElementById("agent-test");
+  if (agentTestBtn) agentTestBtn.addEventListener("click", async ev => {
     const btn = ev.target; btn.disabled = true; btn.textContent = "Testing…";
     const as = document.getElementById("agent-status");
     try {
@@ -482,7 +508,8 @@
     btn.disabled = false; btn.textContent = "Test connection";
   });
 
-  document.getElementById("test-email-btn").addEventListener("click", async ev => {
+  const testEmailBtn = document.getElementById("test-email-btn");
+  if (testEmailBtn) testEmailBtn.addEventListener("click", async ev => {
     const btn = ev.target;
     btn.disabled = true; btn.textContent = "Sending…";
     try {
@@ -492,7 +519,8 @@
     btn.disabled = false; btn.textContent = "Send test email";
   });
 
-  document.getElementById("test-webhook-btn").addEventListener("click", async ev => {
+  const testWebhookBtn = document.getElementById("test-webhook-btn");
+  if (testWebhookBtn) testWebhookBtn.addEventListener("click", async ev => {
     const btn = ev.target;
     // save first so the URL/platform are current, then fire the test
     const payload = {};

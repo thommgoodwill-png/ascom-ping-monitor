@@ -1,0 +1,9 @@
+<div class="filter-row" style="margin-bottom:16px;gap:6px;">
+  <a class="btn small {{ 'primary' if page == 'devices' }}" href="/devices">Devices</a>
+  <a class="btn small {{ 'primary' if page == 'events' }}" href="/events">Events</a>
+  <a class="btn small {{ 'primary' if page == 'heatmap' }}" href="/heatmap">Heatmap</a>
+  <a class="btn small {{ 'primary' if page == 'sla' }}" href="/sla">SLA</a>
+  <a class="btn small {{ 'primary' if page == 'tools' }}" href="/tools">Tools</a>
+  <a class="btn small {{ 'primary' if page == 'capture' }}" href="/capture">Capture</a>
+  {% if is_admin %}<a class="btn small {{ 'primary' if page == 'network_settings' }}" href="/network/settings">Settings</a>{% endif %}
+</div>

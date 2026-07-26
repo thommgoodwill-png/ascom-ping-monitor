@@ -146,8 +146,339 @@ def init_db():
         device_id INTEGER NOT NULL,
         x REAL NOT NULL,                 -- 0..1 relative to image width
         y REAL NOT NULL)""")
+    # ---- IMT bridge devices + status events (read from the bridge DB + log) ----
+    # The IMT integration was RabbitMQ-based in an earlier draft with no site
+    # scoping. If we find that old shape (no site_id column) drop and rebuild —
+    # there is no production IMT data to preserve, and the UNIQUE(ident) it used
+    # can't be widened to per-site in place.
+    _imt_cols = [r[1] for r in db.execute("PRAGMA table_info(imt_devices)")]
+    if _imt_cols and "site_id" not in _imt_cols:
+        db.execute("DROP TABLE IF EXISTS imt_devices")
+        db.execute("DROP TABLE IF EXISTS imt_events")
+    db.execute("""CREATE TABLE IF NOT EXISTS imt_devices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        site_id INTEGER,                  -- NULL = this instance's local bridge
+        ident TEXT NOT NULL,              -- stable key: LocationString / loc:<id> / ip:<addr>
+        name TEXT,
+        status TEXT NOT NULL DEFAULT 'unknown',   -- 'ok' | 'failed' | 'unknown'
+        detail TEXT,
+        location_text TEXT,               -- friendly room/device name
+        location_string TEXT,             -- bus path e.g. 3-4-4-35-41
+        location_id TEXT,                 -- IMT LocationId
+        system_ip TEXT,                   -- Telligence system IP
+        kind TEXT,                        -- DutyArea | Room | Device | System …
+        raw TEXT,                         -- last raw log line / event
+        first_seen REAL, last_seen REAL, last_change REAL,
+        fail_count INTEGER NOT NULL DEFAULT 0)""")
+    # NULL site_id (local) must still be unique per ident, so key on COALESCE.
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS imt_dev_site_ident "
+               "ON imt_devices(COALESCE(site_id,0), ident)")
+    db.execute("""CREATE TABLE IF NOT EXISTS imt_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        site_id INTEGER,
+        ident TEXT, name TEXT, ts REAL NOT NULL,
+        status TEXT, detail TEXT)""")
+    # ---- live nurse-call events (Patient Call, Emergency, WC, Presence …) ----
+    # These are operational calls, NOT device faults. A call is raised (Set) and
+    # later cleared (Clear); the pair shares an episode GUID.
+    db.execute("""CREATE TABLE IF NOT EXISTS imt_calls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        site_id INTEGER,
+        guid TEXT NOT NULL,               -- episode id (Set/Clear pair)
+        code TEXT,                        -- numeric event code (EventString)
+        event_text TEXT,                  -- 'Patient Call', 'Emergency', 'Cord Out' …
+        category TEXT,                    -- emergency|wc|call|presence|staff|other
+        priority TEXT,                    -- High | Low | Info … (from the bridge)
+        location_string TEXT,             -- bus path
+        location_text TEXT,               -- room address from the call
+        location_id TEXT,
+        name TEXT,                        -- friendly room name (from inventory if known)
+        state TEXT NOT NULL DEFAULT 'active',   -- 'active' | 'cleared'
+        raised_ts REAL, cleared_ts REAL,
+        raw TEXT)""")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS imt_call_site_guid "
+               "ON imt_calls(COALESCE(site_id,0), guid)")
     db.commit()
     _seed_default_admin(db)
+
+
+# ---------- IMT bridge devices ----------
+
+def _imt_site_where(site_id):
+    """(sql_fragment, params) matching a site scope, treating None as local."""
+    if site_id is None:
+        return "site_id IS NULL", ()
+    return "site_id=?", (site_id,)
+
+
+def imt_upsert_device(site_id, ident, name, status, detail, raw, ts,
+                      location_text=None, location_string=None,
+                      location_id=None, system_ip=None, kind=None,
+                      authoritative=True):
+    """Record/refresh an IMT device.
+
+    `authoritative` True means `status` is a real fault-state signal (from the
+    log's Set/Clear stream) and should drive status changes. False means this is
+    an inventory refresh (from the bridge DB) that may create the device and
+    keep its metadata current but must NOT override a status the log is driving.
+
+    Returns (status_changed, previous_status).
+    """
+    db = get_db()
+    where, wp = _imt_site_where(site_id)
+    row = db.execute(f"SELECT id, status FROM imt_devices WHERE {where} AND ident=?",
+                     (*wp, ident)).fetchone()
+    if row is None:
+        st = status if authoritative else (status if status in ("ok", "failed") else "unknown")
+        db.execute(
+            "INSERT INTO imt_devices(site_id, ident, name, status, detail, "
+            "location_text, location_string, location_id, system_ip, kind, raw, "
+            "first_seen, last_seen, last_change, fail_count) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (site_id, ident, name, st, detail, location_text, location_string,
+             location_id, system_ip, kind, raw, ts, ts, ts,
+             1 if st == "failed" else 0))
+        db.commit()
+        return (st != "unknown", None)
+
+    prev = row["status"]
+    meta = ("name=COALESCE(?,name), location_text=COALESCE(?,location_text), "
+            "location_string=COALESCE(?,location_string), "
+            "location_id=COALESCE(?,location_id), system_ip=COALESCE(?,system_ip), "
+            "kind=COALESCE(?,kind), last_seen=?")
+    mp = (name, location_text, location_string, location_id, system_ip, kind, ts)
+
+    if not authoritative:
+        # inventory refresh: metadata only, never touches status
+        db.execute(f"UPDATE imt_devices SET {meta} WHERE id=?", (*mp, row["id"]))
+        db.commit()
+        return (False, prev)
+
+    changed = (status != prev)
+    if changed:
+        db.execute(
+            f"UPDATE imt_devices SET {meta}, status=?, detail=?, raw=?, "
+            "last_change=?, fail_count=fail_count+? WHERE id=?",
+            (*mp, status, detail, raw, ts, 1 if status == "failed" else 0, row["id"]))
+    else:
+        db.execute(f"UPDATE imt_devices SET {meta}, detail=?, raw=? WHERE id=?",
+                   (*mp, detail, raw, row["id"]))
+    db.commit()
+    return (changed, prev)
+
+
+def imt_list_devices(site_id=None):
+    where, wp = _imt_site_where(site_id)
+    return [dict(r) for r in get_db().execute(
+        f"SELECT * FROM imt_devices WHERE {where} ORDER BY "
+        "CASE status WHEN 'failed' THEN 0 WHEN 'unknown' THEN 1 ELSE 2 END, "
+        "name, ident", wp).fetchall()]
+
+
+def imt_counts(site_id=None):
+    where, wp = _imt_site_where(site_id)
+    r = get_db().execute(
+        "SELECT COUNT(*) AS total, "
+        "SUM(status='failed') AS failed, SUM(status='ok') AS ok "
+        f"FROM imt_devices WHERE {where}", wp).fetchone()
+    return {"total": r["total"] or 0, "failed": r["failed"] or 0, "ok": r["ok"] or 0}
+
+
+def imt_add_event(site_id, ident, name, status, detail, ts):
+    db = get_db()
+    db.execute("INSERT INTO imt_events(site_id, ident, name, ts, status, detail) "
+               "VALUES(?,?,?,?,?,?)", (site_id, ident, name, ts, status, detail))
+    db.commit()
+
+
+def imt_list_events(site_id=None, limit=200):
+    where, wp = _imt_site_where(site_id)
+    return [dict(r) for r in get_db().execute(
+        f"SELECT * FROM imt_events WHERE {where} ORDER BY ts DESC LIMIT ?",
+        (*wp, limit)).fetchall()]
+
+
+def imt_events_after(site_id, after_id, limit=500):
+    """New IMT events by row id (for the agent to push up to the hub)."""
+    where, wp = _imt_site_where(site_id)
+    return [dict(r) for r in get_db().execute(
+        f"SELECT * FROM imt_events WHERE {where} AND id>? ORDER BY id LIMIT ?",
+        (*wp, after_id, limit)).fetchall()]
+
+
+def imt_clear_devices(site_id=None):
+    db = get_db()
+    where, wp = _imt_site_where(site_id)
+    db.execute(f"DELETE FROM imt_devices WHERE {where}", wp)
+    db.execute(f"DELETE FROM imt_events WHERE {where}", wp)
+    db.execute(f"DELETE FROM imt_calls WHERE {where}", wp)
+    db.commit()
+
+
+# ---------- IMT live calls ----------
+
+_PRIO_ORDER = ("CASE priority WHEN 'High' THEN 0 WHEN 'Alarm' THEN 0 "
+               "WHEN 'Low' THEN 1 WHEN 'Normal' THEN 1 ELSE 2 END")
+
+
+def imt_call_set(site_id, guid, code, event_text, category, priority,
+                 location_string, location_text, location_id, name, ts, raw):
+    """Raise (or refresh) an active call. Returns True if it's newly active."""
+    db = get_db()
+    where, wp = _imt_site_where(site_id)
+    row = db.execute(f"SELECT id, state FROM imt_calls WHERE {where} AND guid=?",
+                     (*wp, guid)).fetchone()
+    if row is None:
+        db.execute(
+            "INSERT INTO imt_calls(site_id, guid, code, event_text, category, "
+            "priority, location_string, location_text, location_id, name, state, "
+            "raised_ts, cleared_ts, raw) VALUES(?,?,?,?,?,?,?,?,?,?, 'active', ?, NULL, ?)",
+            (site_id, guid, code, event_text, category, priority, location_string,
+             location_text, location_id, name, ts, raw))
+        db.commit()
+        return True
+    db.execute(
+        "UPDATE imt_calls SET state='active', code=?, event_text=?, category=?, "
+        "priority=?, location_string=COALESCE(?,location_string), "
+        "location_text=COALESCE(?,location_text), location_id=COALESCE(?,location_id), "
+        "name=COALESCE(?,name), raised_ts=?, cleared_ts=NULL, raw=? WHERE id=?",
+        (code, event_text, category, priority, location_string, location_text,
+         location_id, name, ts, raw, row["id"]))
+    db.commit()
+    return row["state"] != "active"
+
+
+def imt_call_clear(site_id, guid, ts):
+    """Clear an active call. Returns True if one was actually active."""
+    db = get_db()
+    where, wp = _imt_site_where(site_id)
+    row = db.execute(f"SELECT id FROM imt_calls WHERE {where} AND guid=? "
+                     "AND state='active'", (*wp, guid)).fetchone()
+    if not row:
+        return False
+    db.execute("UPDATE imt_calls SET state='cleared', cleared_ts=? WHERE id=?",
+               (ts, row["id"]))
+    db.commit()
+    return True
+
+
+def imt_list_active_calls(site_id=None):
+    where, wp = _imt_site_where(site_id)
+    return [dict(r) for r in get_db().execute(
+        f"SELECT * FROM imt_calls WHERE {where} AND state='active' "
+        f"ORDER BY {_PRIO_ORDER}, raised_ts", wp).fetchall()]
+
+
+def imt_list_recent_calls(site_id=None, limit=100):
+    where, wp = _imt_site_where(site_id)
+    return [dict(r) for r in get_db().execute(
+        f"SELECT * FROM imt_calls WHERE {where} "
+        "ORDER BY COALESCE(cleared_ts, raised_ts) DESC LIMIT ?",
+        (*wp, limit)).fetchall()]
+
+
+def imt_call_counts(site_id=None):
+    where, wp = _imt_site_where(site_id)
+    r = get_db().execute(
+        "SELECT COUNT(*) AS active, "
+        "SUM(priority IN ('High','Alarm')) AS emergency "
+        f"FROM imt_calls WHERE {where} AND state='active'", wp).fetchone()
+    return {"active": r["active"] or 0, "emergency": r["emergency"] or 0}
+
+
+def imt_duty_areas(site_id=None):
+    """The duty areas known for this scope (from the location inventory), each
+    {string, name}. Used to split calls/faults per duty area."""
+    where, wp = _imt_site_where(site_id)
+    rows = get_db().execute(
+        "SELECT location_string AS string, MAX(name) AS name FROM imt_devices "
+        f"WHERE {where} AND kind='Duty Area' AND location_string IS NOT NULL "
+        "GROUP BY location_string ORDER BY name", wp).fetchall()
+    return [{"string": r["string"], "name": r["name"] or r["string"]} for r in rows]
+
+
+def imt_calls_prune(site_id=None, keep_cleared=500):
+    """Keep all active calls but bound the cleared history."""
+    db = get_db()
+    where, wp = _imt_site_where(site_id)
+    ids = [row["id"] for row in db.execute(
+        f"SELECT id FROM imt_calls WHERE {where} AND state='cleared' "
+        "ORDER BY cleared_ts DESC LIMIT -1 OFFSET ?", (*wp, keep_cleared)).fetchall()]
+    if ids:
+        db.executemany("DELETE FROM imt_calls WHERE id=?", [(i,) for i in ids])
+        db.commit()
+
+
+def imt_clear_calls(site_id=None):
+    db = get_db()
+    where, wp = _imt_site_where(site_id)
+    db.execute(f"DELETE FROM imt_calls WHERE {where}", wp)
+    db.commit()
+
+
+def imt_ingest_calls_from_agent(site_id, active, history):
+    """Hub-side: replace a site's active calls with the agent's snapshot and
+    fold in any freshly-cleared calls for the history."""
+    db = get_db()
+    where, wp = _imt_site_where(site_id)
+    db.execute(f"DELETE FROM imt_calls WHERE {where} AND state='active'", wp)
+    def _ins(c, state):
+        db.execute(
+            "INSERT INTO imt_calls(site_id, guid, code, event_text, category, "
+            "priority, location_string, location_text, location_id, name, state, "
+            "raised_ts, cleared_ts, raw) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (site_id, c.get("guid"), c.get("code"), c.get("event_text"),
+             c.get("category"), c.get("priority"), c.get("location_string"),
+             c.get("location_text"), c.get("location_id"), c.get("name"), state,
+             c.get("raised_ts"), c.get("cleared_ts"), c.get("raw")))
+    n = 0
+    for c in (active or [])[:2000]:
+        if not c.get("guid"):
+            continue
+        _ins(c, "active")
+        n += 1
+    for c in (history or [])[:2000]:
+        g = c.get("guid")
+        if not g:
+            continue
+        ex = db.execute(f"SELECT id FROM imt_calls WHERE {where} AND guid=?",
+                        (*wp, g)).fetchone()
+        if ex:
+            db.execute("UPDATE imt_calls SET state='cleared', cleared_ts=? WHERE id=?",
+                       (c.get("cleared_ts"), ex["id"]))
+        else:
+            _ins(c, "cleared")
+    db.commit()
+    imt_calls_prune(site_id)
+    return {"active": n}
+
+
+def imt_ingest_from_agent(site_id, devices, events):
+    """Hub-side: absorb a batch of IMT devices + events pushed by a site agent.
+    Device rows carry the agent's current status snapshot (authoritative), so
+    the hub mirrors them under the given site."""
+    n_dev = n_ev = 0
+    for d in (devices or [])[:5000]:
+        ident = (d.get("ident") or "").strip()
+        if not ident:
+            continue
+        imt_upsert_device(
+            site_id, ident, d.get("name"), d.get("status") or "unknown",
+            d.get("detail"), d.get("raw"), float(d.get("last_change") or time.time()),
+            location_text=d.get("location_text"),
+            location_string=d.get("location_string"),
+            location_id=d.get("location_id"), system_ip=d.get("system_ip"),
+            kind=d.get("kind"), authoritative=True)
+        n_dev += 1
+    for e in (events or [])[:2000]:
+        ident = (e.get("ident") or "").strip()
+        if not ident:
+            continue
+        imt_add_event(site_id, ident, e.get("name") or ident,
+                      e.get("status"), e.get("detail"),
+                      float(e.get("ts") or time.time()))
+        n_ev += 1
+    return {"devices": n_dev, "events": n_ev}
 
 
 # ---------- floor plans ----------

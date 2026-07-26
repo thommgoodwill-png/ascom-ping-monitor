@@ -66,6 +66,62 @@ DEFAULTS = {
     "wh_check": True,               # post on service-check failure
     "wh_rogue": True,               # post on new/rogue device
 
+    # -------- IMT bridge (reads the bridge's own DB + log on the server) --------
+    # The Ascom/Telligence IMT bridge keeps its live state in a small SQLite
+    # database and streams device supervision/failure events to a log file.
+    # We read both directly — no RabbitMQ, no proprietary protocol. The reader
+    # must run where those files are reachable (the Telligence server itself, or
+    # a share). On a customer site the Windows agent reads them locally and
+    # pushes the results up to the controller under that site.
+    "imt_enabled": False,           # master on/off for the IMT bridge monitor
+    # Default to the standard Ascom install location; override per-server if the
+    # bridge lives elsewhere. Reader stays off until imt_enabled is switched on.
+    "imt_db_path": r"C:\Program Files (x86)\Ascom\IMT Bridge\Db\ImtBridgeDb.db3",
+    "imt_log_path": r"C:\Program Files (x86)\Ascom\IMT Bridge\ImtBridge.log4net",
+    # Telligence config cache (SQLite) — device type / IP / MAC for the fault
+    # drill-down. Read-only, on demand (not polled).
+    "imt_config_db_path": r"C:\Program Files (x86)\Ascom\IMT Bridge\Db\ConfigDb3.db3",
+    "imt_poll_secs": 8,             # how often to re-read the DB and tail the log
+                                    # (log tail is incremental + cheap; faults come
+                                    # from the log so this mainly bounds call latency)
+    "imt_alert": True,              # fire a webhook when an IMT device fails / recovers
+    "imt_emergency_alert": False,   # fire a webhook when an Emergency / WC call is raised
+                                    # (all other calls are display-only on the board)
+    # -------- IMT bridge SERVICE health --------
+    # Watch that the bridge service itself is running. Primary signal is
+    # write-freshness (the bridge writes its log/DB continuously while up); set a
+    # Windows service name for an authoritative `sc query` check instead.
+    "imt_service_check": True,       # monitor the bridge service up/down
+    "imt_service_stale_secs": 180,   # no log/DB write for this long = service down
+    "imt_service_name": "",          # optional Windows service name (authoritative)
+
+    # -------- Telligence config database (Dukane ESM / SQL Server) --------
+    # The runtime bridge DB only knows a faulty device's address; its type and
+    # serial live in the Telligence SQL Server database (DukaneESMMessages).
+    # Often on localhost, but not always — hence a full connection config.
+    "tel_db_enabled": False,        # master on/off for the Telligence DB lookup
+    "tel_db_host": "localhost",     # SQL Server host / IP
+    "tel_db_instance": "",          # named instance (e.g. TELLIGENCE); blank = default
+    "tel_db_port": 1433,            # TCP port (ignored when an instance is named)
+    "tel_db_name": "DukaneESMMessages",
+    "tel_db_auth": "windows",       # windows (trusted) | sql
+    "tel_db_user": "",              # SQL login (sql auth only)
+    "tel_db_password": "",          # SQL password (masked in the API)
+
+    # -------- ASCII call feed (dutyarea|position|location|callstate over IP) --------
+    # Streams one delimited line per call transition to a third-party receiver
+    # (display board / paging gateway / logger). Purely outbound — a Reset line
+    # only reflects that the nurse-call system cleared the call.
+    "feed_enabled": False,          # master on/off for the call feed
+    "feed_mode": "tcp_client",      # tcp_client (connect out) | tcp_server (listen) | udp
+    "feed_host": "",                # destination host / IP (tcp_client + udp)
+    "feed_port": 0,                 # destination / listen port
+    "feed_eol": "cr",               # line ending: cr (\r) | crlf | lf
+    "feed_clear_text": "Reset",     # callstate word sent when a call clears
+    "feed_heartbeat_enabled": False,  # master on/off for the keepalive line
+    "feed_heartbeat_secs": 30,      # keepalive line every N seconds
+    "feed_heartbeat_text": "HEARTBEAT",   # the keepalive line content
+
     # -------- packet capture --------
     "capture_enabled": False,       # master on/off for tcpdump packet capture
     "capture_max_seconds": 60,      # UI upper bound for a single capture
@@ -102,6 +158,11 @@ CLAMPS = {
     "capture_max_packets": (10, 100000),
     "cert_warn_days": (1, 365),
     "rogue_scan_interval_min": (5, 1440),
+    "imt_poll_secs": (5, 3600),
+    "imt_service_stale_secs": (30, 3600),
+    "tel_db_port": (1, 65535),
+    "feed_port": (0, 65535),
+    "feed_heartbeat_secs": (0, 3600),
 }
 
 _HHMM = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d$")

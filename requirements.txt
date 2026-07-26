@@ -2,6 +2,14 @@ flask>=2.2
 waitress>=2.1
 qrcode>=7.0
 
+# Telligence config DB (device type/serial) lookup over SQL Server.
+# python-tds is pure Python (works everywhere, SQL auth). For Windows/trusted
+# auth install pyodbc too (needs an ODBC Driver for SQL Server, which a SQL
+# Server install provides). The app runs fine without either — the Telligence
+# database feature just reports the driver as unavailable until one is present.
+python-tds>=1.13
+# pyodbc>=5.0        # uncomment on the Windows server for Windows-auth support
+
 # Optional: pysnmp enables pure-Python SNMP (works without the net-snmp CLI,
 # and on the Windows exe). Uncomment to include it. The Linux installer also
 # installs the `snmp` package, which the SNMP tool uses as a fallback.

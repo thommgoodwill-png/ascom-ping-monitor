@@ -28,7 +28,10 @@ call build-venv\Scripts\activate.bat
 
 echo === Installing dependencies (flask, waitress, pystray, pillow, pyinstaller)...
 pip install --quiet --upgrade pip
-pip install --quiet flask waitress pystray pillow pyinstaller || (echo pip install failed & pause & exit /b 1)
+pip install --quiet flask waitress pystray pillow pyinstaller python-tds || (echo pip install failed & pause & exit /b 1)
+
+echo === Installing pyodbc (for Windows-auth SQL Server; optional)...
+pip install --quiet pyodbc || echo    (pyodbc unavailable - SQL-login auth will still work via python-tds)
 
 echo === Building AscomPingMonitor.exe (takes a minute)...
 pyinstaller --noconfirm --clean --onefile --noconsole ^
@@ -39,6 +42,9 @@ pyinstaller --noconfirm --clean --onefile --noconsole ^
     --add-data "pingmon\data;pingmon\data" ^
     --hidden-import waitress ^
     --hidden-import pystray._win32 ^
+    --hidden-import pyodbc ^
+    --hidden-import pytds ^
+    --collect-submodules pytds ^
     run.py
 if errorlevel 1 (echo BUILD FAILED & pause & exit /b 1)
 

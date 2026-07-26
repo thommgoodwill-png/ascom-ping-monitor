@@ -1,4 +1,6 @@
 <!DOCTYPE html>
+{% set net_pages = ['devices','events','heatmap','sla','tools','capture','network_settings'] %}
+{% set tel_pages = ['telligence','telligence_settings'] %}
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -23,12 +25,8 @@
   <nav class="nav">
     <a href="/" class="{{ 'active' if page == 'dashboard' }}">Dashboard</a>
     <a href="/customers" class="{{ 'active' if page == 'customers' }}">Customers</a>
-    <a href="/devices" class="{{ 'active' if page == 'devices' }}">Devices</a>
-    <a href="/events" class="{{ 'active' if page == 'events' }}">Events</a>
-    <a href="/heatmap" class="{{ 'active' if page == 'heatmap' }}">Heatmap</a>
-    <a href="/sla" class="{{ 'active' if page == 'sla' }}">SLA</a>
-    <a href="/capture" class="{{ 'active' if page == 'capture' }}">Capture</a>
-    <a href="/tools" class="{{ 'active' if page == 'tools' }}">Tools</a>
+    <a href="/devices" class="{{ 'active' if page in net_pages }}">Network Monitoring</a>
+    <a href="/telligence" class="{{ 'active' if page in tel_pages }}">Telligence Monitoring</a>
     <a href="/settings" class="{{ 'active' if page == 'settings' }}">Settings</a>
     {% if is_admin %}<a href="/users" class="{{ 'active' if page == 'users' }}">Users</a>{% endif %}
   </nav>
@@ -47,6 +45,8 @@
   </div>
 </header>
 <main class="wrap">
+  {% if page in net_pages %}{% include "_net_subnav.html" %}{% endif %}
+  {% if page in tel_pages %}{% include "_tel_subnav.html" %}{% endif %}
   {% block content %}{% endblock %}
 </main>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>

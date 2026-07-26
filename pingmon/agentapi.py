@@ -208,6 +208,33 @@ def report(site):
     return jsonify(ok=True, accepted_pings=accepted)
 
 
+@bp.route("/imt", methods=["POST"])
+@site_auth
+def imt_ingest(site):
+    """Ingest IMT bridge devices + fault events the agent read from the site's
+    local Telligence bridge (its ImtBridgeDb.db3 + ImtBridge.log4net). Stored
+    under this site so the controller shows them on the site's IMT tab.
+
+    Body: {
+      "version": "..", "host": "..",
+      "devices": [ {"ident","name","status","detail","location_text",
+                    "location_string","location_id","system_ip","kind",
+                    "last_change"}, ... ],
+      "events":  [ {"ident","name","status","detail","ts"}, ... ]
+    }
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    res = database.imt_ingest_from_agent(
+        site["id"], data.get("devices") or [], data.get("events") or [])
+    calls = database.imt_ingest_calls_from_agent(
+        site["id"], data.get("calls_active") or [], data.get("calls_history") or [])
+    database.touch_site(site["id"], agent_version=data.get("version"),
+                        agent_host=data.get("host"))
+    log.info("site %s: ingested %d IMT devices, %d events, %d active calls",
+             site["id"], res["devices"], res["events"], calls["active"])
+    return jsonify(ok=True, **res, calls=calls["active"])
+
+
 @bp.route("/heartbeat", methods=["POST"])
 @site_auth
 def heartbeat(site):
