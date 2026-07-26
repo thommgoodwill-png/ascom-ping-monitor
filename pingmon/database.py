@@ -131,8 +131,115 @@ def init_db():
         expires_at REAL NOT NULL,
         accepted INTEGER NOT NULL DEFAULT 0,
         created_by TEXT)""")
+    # ---- floor plans (heatmap overlay) ----
+    db.execute("""CREATE TABLE IF NOT EXISTS floorplans (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        site_id INTEGER,                 -- NULL = hub-local scope
+        name TEXT NOT NULL,
+        ext TEXT NOT NULL,               -- stored image extension (png/jpg/svg)
+        w INTEGER, h INTEGER,
+        sort INTEGER DEFAULT 0,
+        created_at REAL NOT NULL)""")
+    db.execute("""CREATE TABLE IF NOT EXISTS floorplan_pins (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        floorplan_id INTEGER NOT NULL,
+        device_id INTEGER NOT NULL,
+        x REAL NOT NULL,                 -- 0..1 relative to image width
+        y REAL NOT NULL)""")
     db.commit()
     _seed_default_admin(db)
+
+
+# ---------- floor plans ----------
+
+def add_floorplan(name, ext, site_id=None, w=None, h=None):
+    db = get_db()
+    cur = db.execute(
+        "INSERT INTO floorplans(site_id, name, ext, w, h, sort, created_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (site_id, name, ext, w, h, time.time(), time.time()))
+    db.commit()
+    return cur.lastrowid
+
+
+def list_floorplans(site_id="__all__"):
+    q = "SELECT * FROM floorplans"
+    cond, vals = [], []
+    if site_id is None:
+        cond.append("site_id IS NULL")
+    elif site_id != "__all__":
+        cond.append("site_id=?"); vals.append(site_id)
+    if cond:
+        q += " WHERE " + " AND ".join(cond)
+    q += " ORDER BY sort, id"
+    return [dict(r) for r in get_db().execute(q, vals).fetchall()]
+
+
+def get_floorplan(fp_id):
+    r = get_db().execute("SELECT * FROM floorplans WHERE id=?", (fp_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def delete_floorplan(fp_id):
+    db = get_db()
+    db.execute("DELETE FROM floorplan_pins WHERE floorplan_id=?", (fp_id,))
+    db.execute("DELETE FROM floorplans WHERE id=?", (fp_id,))
+    db.commit()
+
+
+def rename_floorplan(fp_id, name):
+    db = get_db()
+    db.execute("UPDATE floorplans SET name=? WHERE id=?", (name, fp_id))
+    db.commit()
+
+
+def list_pins(fp_id):
+    return [dict(r) for r in get_db().execute(
+        "SELECT * FROM floorplan_pins WHERE floorplan_id=? ORDER BY id",
+        (fp_id,)).fetchall()]
+
+
+def add_pin(fp_id, device_id, x, y):
+    db = get_db()
+    cur = db.execute(
+        "INSERT INTO floorplan_pins(floorplan_id, device_id, x, y) VALUES(?,?,?,?)",
+        (fp_id, device_id, x, y))
+    db.commit()
+    return cur.lastrowid
+
+
+def move_pin(pin_id, x, y):
+    db = get_db()
+    db.execute("UPDATE floorplan_pins SET x=?, y=? WHERE id=?", (x, y, pin_id))
+    db.commit()
+
+
+def delete_pin(pin_id):
+    db = get_db()
+    db.execute("DELETE FROM floorplan_pins WHERE id=?", (pin_id,))
+    db.commit()
+
+
+def get_pin(pin_id):
+    r = get_db().execute("SELECT * FROM floorplan_pins WHERE id=?", (pin_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def device_drop_count(device_id, start, end):
+    """Number of 'down' events for a device within a window — used to size the
+    problem-area heat on floor plans."""
+    r = get_db().execute(
+        "SELECT COUNT(*) AS n FROM events WHERE device_id=? AND type='down' "
+        "AND ts >= ? AND ts <= ?", (device_id, start, end)).fetchone()
+    return r["n"] if r else 0
+
+
+def device_status_events(device_id, start, end):
+    """down/up events for a device in a window, oldest first — lets the history
+    slider reconstruct up/down state at any point in time."""
+    return [dict(r) for r in get_db().execute(
+        "SELECT ts, type FROM events WHERE device_id=? AND type IN ('down','up') "
+        "AND ts >= ? AND ts <= ? ORDER BY ts", (device_id, start, end)).fetchall()]
 
 
 def _seed_default_admin(db):

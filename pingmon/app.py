@@ -10,9 +10,9 @@ import threading
 import time
 
 from flask import (Flask, jsonify, redirect, render_template, request,
-                   send_from_directory, session, url_for)
+                   send_file, send_from_directory, session, url_for)
 
-from . import capture, database, netcheck, netdiag, oui, settings
+from . import capture, database, floorplans, netcheck, netdiag, oui, settings
 from .emailer import Emailer, REPORT_KINDS
 from .monitor import Monitor
 from .webhooks import Webhooks
@@ -894,6 +894,193 @@ def register_routes(app):
         except ValueError:
             limit = 200
         return jsonify(events=database.list_events(limit=limit, site_id=_view_scope()))
+
+    # ---------------- API: floor plans ----------------
+
+    def _fp_online(d, live):
+        """Simplified status for a floor-plan pin: 'up' (green), 'down' (red,
+        throbbing) or 'unknown' (grey). Works for hub-local devices (live
+        monitor state) and site devices (last pushed ping)."""
+        if not d["enabled"]:
+            return "unknown"
+        st = live.get(d["id"])
+        if st and st.get("state"):
+            return "down" if st["state"] == "down" else \
+                   ("unknown" if st["state"] == "unknown" else "up")
+        lp = database.last_ping(d["id"])
+        if not lp:
+            return "unknown"
+        return "up" if lp["success"] else "down"
+
+    @app.route("/api/floorplans")
+    @login_required
+    def api_floorplans():
+        scope = _view_scope()
+        plans = database.list_floorplans(site_id=scope)
+        devs = {d["id"]: d for d in database.list_devices(site_id=scope)}
+        out = []
+        for p in plans:
+            pins = []
+            for pin in database.list_pins(p["id"]):
+                d = devs.get(pin["device_id"])
+                if not d:
+                    continue
+                pins.append({"pin_id": pin["id"], "device_id": pin["device_id"],
+                             "x": pin["x"], "y": pin["y"],
+                             "name": d["name"], "host": d["host"]})
+            out.append({"id": p["id"], "name": p["name"], "ext": p["ext"],
+                        "w": p["w"], "h": p["h"], "pins": pins})
+        # devices available to place (in scope)
+        avail = [{"id": d["id"], "name": d["name"], "host": d["host"]}
+                 for d in devs.values()]
+        return jsonify(floorplans=out, devices=avail)
+
+    @app.route("/api/floorplans", methods=["POST"])
+    @login_required
+    def api_floorplan_upload():
+        f = request.files.get("file")
+        if not f or not f.filename:
+            return jsonify(error="no file uploaded"), 400
+        name = (request.form.get("name") or f.filename.rsplit(".", 1)[0]).strip()[:80]
+        scope = request.form.get("site")
+        site_id = None
+        if scope:
+            try:
+                site_id = int(scope)
+            except ValueError:
+                site_id = None
+        if floorplans.ext_of(f.filename) not in floorplans.ALLOWED_EXT:
+            return jsonify(error="Unsupported type. Allowed: JPG, PNG, SVG, PDF."), 400
+        fp_id = database.add_floorplan(name or "Floor plan", "png", site_id=site_id)
+        try:
+            store_ext, w, h = floorplans.save_upload(f, fp_id)
+        except (ValueError, RuntimeError) as e:
+            database.delete_floorplan(fp_id)
+            return jsonify(error=str(e)), 400
+        except Exception as e:
+            database.delete_floorplan(fp_id)
+            log.warning("floor plan upload failed: %s", e)
+            return jsonify(error="Couldn't process that file. Try a PNG, JPG or SVG."), 400
+        # persist the real stored extension + dimensions
+        db = database.get_db()
+        db.execute("UPDATE floorplans SET ext=?, w=?, h=? WHERE id=?",
+                   (store_ext, w, h, fp_id))
+        db.commit()
+        return jsonify(id=fp_id, ext=store_ext, w=w, h=h)
+
+    @app.route("/api/floorplans/<int:fp_id>", methods=["PUT"])
+    @login_required
+    def api_floorplan_rename(fp_id):
+        if not database.get_floorplan(fp_id):
+            return jsonify(error="not found"), 404
+        name = (request.get_json(force=True) or {}).get("name", "").strip()[:80]
+        if name:
+            database.rename_floorplan(fp_id, name)
+        return jsonify(ok=True)
+
+    @app.route("/api/floorplans/<int:fp_id>", methods=["DELETE"])
+    @login_required
+    def api_floorplan_delete(fp_id):
+        p = database.get_floorplan(fp_id)
+        if not p:
+            return jsonify(error="not found"), 404
+        floorplans.delete_image(fp_id, p["ext"])
+        database.delete_floorplan(fp_id)
+        return jsonify(ok=True)
+
+    @app.route("/floorplan/<int:fp_id>/image")
+    @login_required
+    def floorplan_image(fp_id):
+        p = database.get_floorplan(fp_id)
+        if not p:
+            return "not found", 404
+        path = floorplans.image_path(fp_id, p["ext"])
+        if not os.path.exists(path):
+            return "no image", 404
+        return send_file(path, mimetype=floorplans.MIME.get(p["ext"], "image/png"))
+
+    @app.route("/api/floorplans/<int:fp_id>/pins", methods=["POST"])
+    @login_required
+    def api_floorplan_add_pin(fp_id):
+        if not database.get_floorplan(fp_id):
+            return jsonify(error="not found"), 404
+        data = request.get_json(force=True) or {}
+        try:
+            device_id = int(data.get("device_id"))
+            x = max(0.0, min(1.0, float(data.get("x"))))
+            y = max(0.0, min(1.0, float(data.get("y"))))
+        except (TypeError, ValueError):
+            return jsonify(error="device_id, x, y required"), 400
+        if not database.get_device(device_id):
+            return jsonify(error="device not found"), 404
+        pin_id = database.add_pin(fp_id, device_id, x, y)
+        return jsonify(pin_id=pin_id)
+
+    @app.route("/api/floorplans/pins/<int:pin_id>", methods=["PUT"])
+    @login_required
+    def api_floorplan_move_pin(pin_id):
+        if not database.get_pin(pin_id):
+            return jsonify(error="not found"), 404
+        data = request.get_json(force=True) or {}
+        try:
+            x = max(0.0, min(1.0, float(data.get("x"))))
+            y = max(0.0, min(1.0, float(data.get("y"))))
+        except (TypeError, ValueError):
+            return jsonify(error="x, y required"), 400
+        database.move_pin(pin_id, x, y)
+        return jsonify(ok=True)
+
+    @app.route("/api/floorplans/pins/<int:pin_id>", methods=["DELETE"])
+    @login_required
+    def api_floorplan_delete_pin(pin_id):
+        if not database.get_pin(pin_id):
+            return jsonify(error="not found"), 404
+        database.delete_pin(pin_id)
+        return jsonify(ok=True)
+
+    @app.route("/api/floorplans/status")
+    @login_required
+    def api_floorplan_status():
+        """Per-device current status + drop count over a window, for colouring
+        pins and the problem-area heat. seconds=0 → just current status."""
+        scope = _view_scope()
+        try:
+            seconds = max(0, min(90 * 86400, int(request.args.get("seconds", 0))))
+        except ValueError:
+            seconds = 0
+        now = time.time()
+        start = now - seconds if seconds else now
+        live = monitor.status()
+        out = {}
+        for d in database.list_devices(site_id=scope):
+            lp = database.last_ping(d["id"])
+            out[str(d["id"])] = {
+                "state": _fp_online(d, live),
+                "last_latency": lp["latency"] if lp else None,
+                "last_ts": lp["ts"] if lp else None,
+                "drops": database.device_drop_count(d["id"], start, now) if seconds else 0,
+            }
+        return jsonify(now=now, seconds=seconds, devices=out)
+
+    @app.route("/api/floorplans/timeline")
+    @login_required
+    def api_floorplan_timeline():
+        """down/up events per device over a window so the history slider can
+        reconstruct each device's state at any moment."""
+        scope = _view_scope()
+        try:
+            seconds = max(3600, min(90 * 86400, int(request.args.get("seconds", 86400))))
+        except ValueError:
+            seconds = 86400
+        now = time.time()
+        start = now - seconds
+        out = {}
+        for d in database.list_devices(site_id=scope):
+            evs = database.device_status_events(d["id"], start, now)
+            drops = database.device_drop_count(d["id"], start, now)
+            out[str(d["id"])] = {"events": [[e["ts"], e["type"]] for e in evs],
+                                 "drops": drops}
+        return jsonify(now=now, start=start, seconds=seconds, devices=out)
 
     # ---------------- API: settings & email ----------------
 

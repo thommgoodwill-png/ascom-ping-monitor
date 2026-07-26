@@ -101,7 +101,7 @@ a { color: inherit; }
 .mon-state.off .dot { background: var(--muted); }
 
 /* ---------- layout ---------- */
-.wrap { max-width: 1280px; margin: 0 auto; padding: 20px; }
+.wrap { max-width: 100%; margin: 0 auto; padding: 20px 28px; }
 .card {
   background: var(--surface);
   border: 1px solid var(--border);

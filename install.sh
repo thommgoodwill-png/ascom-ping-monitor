@@ -21,7 +21,7 @@ echo "==> Installing OS packages (python3, venv, iputils-ping, traceroute)…"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq python3 python3-venv python3-pip iputils-ping traceroute \
-  mtr-tiny tcpdump snmp iperf3 curl ca-certificates tar >/dev/null
+  mtr-tiny tcpdump snmp iperf3 curl ca-certificates tar poppler-utils >/dev/null
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo /tmp)"
 if [[ ! -d "$SRC_DIR/pingmon" ]]; then
