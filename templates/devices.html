@@ -1,5 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+  .drag-grip { cursor:grab; color:var(--muted); font-size:16px; user-select:none;
+    padding:0 4px; display:inline-block; }
+  .drag-grip:active { cursor:grabbing; }
+  #dev-table tbody tr.dragging { opacity:.5; background:var(--surface-2); }
+</style>
 <h1 class="page-title">Devices</h1>
 
 <div class="card">
@@ -45,11 +51,12 @@
 
 <div class="card">
   <h2>Monitored devices</h2>
-  <p class="card-sub">Toggle a device off to pause pinging it without losing its history.</p>
+  <p class="card-sub">Toggle a device off to pause pinging it without losing its history.
+    Drag the <span style="letter-spacing:1px;">⠿</span> handle to reorder devices.</p>
   <table class="list" id="dev-table">
     <thead>
       <tr>
-        <th>Enabled</th><th>Name</th><th>Host</th><th>MAC</th>
+        <th></th><th>Enabled</th><th>Name</th><th>Host</th><th>MAC</th>
         <th class="num">Interval</th><th class="num">Warn/Crit</th>
         <th>Status</th><th class="num">Last ping</th><th class="right">Actions</th>
       </tr>
@@ -64,6 +71,25 @@
 <script>
 (function () {
   "use strict";
+  let dragging = false, dragRow = null;
+
+  function rowAfter(tb, y) {
+    const rows = [...tb.querySelectorAll("tr:not(.dragging)")];
+    let closest = null, closestOffset = -Infinity;
+    for (const r of rows) {
+      const box = r.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+      if (offset < 0 && offset > closestOffset) { closestOffset = offset; closest = r; }
+    }
+    return closest;
+  }
+
+  async function saveOrder() {
+    const tb = document.querySelector("#dev-table tbody");
+    const ids = [...tb.querySelectorAll("tr")].map(tr => tr.dataset.id).filter(Boolean);
+    try { await api("/api/devices/reorder", { method: "POST", body: JSON.stringify({ ids }) }); }
+    catch (e) { toast(e.message, true); load(); }
+  }
 
   function pillFor(d) {
     if (!d.enabled) return ["disabled", "○ Disabled"];
@@ -78,6 +104,7 @@
   }
 
   async function load() {
+    if (dragging) return;   // don't rebuild the table mid-drag
     const data = await api("/api/devices");
     const tb = document.querySelector("#dev-table tbody");
     tb.innerHTML = "";
@@ -85,6 +112,22 @@
       data.devices.length ? "none" : "block";
     for (const d of data.devices) {
       const tr = document.createElement("tr");
+      tr.dataset.id = d.id;
+
+      // drag handle
+      const tdGrip = document.createElement("td");
+      const grip = document.createElement("span");
+      grip.className = "drag-grip"; grip.textContent = "⠿"; grip.title = "Drag to reorder";
+      grip.draggable = true;
+      grip.addEventListener("dragstart", e => {
+        dragRow = tr; dragging = true; tr.classList.add("dragging");
+        e.dataTransfer.effectAllowed = "move";
+        try { e.dataTransfer.setData("text/plain", d.id); } catch (_) {}
+      });
+      grip.addEventListener("dragend", () => {
+        tr.classList.remove("dragging"); dragging = false; dragRow = null; saveOrder();
+      });
+      tdGrip.appendChild(grip); tr.appendChild(tdGrip);
 
       // enabled switch
       const tdEn = document.createElement("td");
@@ -208,6 +251,16 @@
       toast("Device added — pinging starts within a few seconds");
       load();
     } catch (e) { toast(e.message, true); }
+  });
+
+  // reorder: while a row is being dragged, move it under the cursor
+  document.querySelector("#dev-table tbody").addEventListener("dragover", e => {
+    if (!dragRow) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = "move";
+    const tb = e.currentTarget;
+    const after = rowAfter(tb, e.clientY);
+    if (after == null) tb.appendChild(dragRow);
+    else tb.insertBefore(dragRow, after);
   });
 
   load();

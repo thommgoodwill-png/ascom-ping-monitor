@@ -764,6 +764,21 @@ def register_routes(app):
             database.update_device(dev_id, **extra)
         return jsonify(id=dev_id)
 
+    @app.route("/api/devices/reorder", methods=["POST"])
+    @login_required
+    def api_devices_reorder():
+        """Persist a new device display order (drag-to-reorder on the Devices
+        page). Body: {"ids": [3, 1, 2, ...]}."""
+        data = request.get_json(force=True) or {}
+        ids = []
+        for i in (data.get("ids") or []):
+            try:
+                ids.append(int(i))
+            except (TypeError, ValueError):
+                continue
+        database.reorder_devices(ids)
+        return jsonify(ok=True)
+
     @app.route("/api/devices/<int:dev_id>", methods=["PUT"])
     @login_required
     def api_update_device(dev_id):

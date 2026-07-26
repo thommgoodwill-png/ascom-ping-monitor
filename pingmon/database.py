@@ -291,6 +291,14 @@ def add_device(name, host, enabled=1, interval_override=None, site_id=None):
     return cur.lastrowid
 
 
+def reorder_devices(ids):
+    """Set the sort order of devices to match the given id sequence."""
+    db = get_db()
+    for i, did in enumerate(ids):
+        db.execute("UPDATE devices SET sort=? WHERE id=?", (i, did))
+    db.commit()
+
+
 def update_device(dev_id, **fields):
     allowed = {"name", "host", "enabled", "interval_override", "sort",
                "warn_override", "crit_override", "tcp_ports", "check_url",
