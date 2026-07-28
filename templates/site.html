@@ -64,6 +64,7 @@
   let rangeSec = 3600, overview = null;
   let dragging = false, dragCard = null, ph = null;
   const miniCharts = new Map();
+  const byId = {};   // latest device object per id (for the edit/detail modals)
 
   // The card the placeholder should sit BEFORE (or null = append at the end).
   // Uses closest-centre with a slight vertical bias so grid rows are respected.
@@ -118,6 +119,7 @@
     const grid = document.getElementById("device-grid");
     document.getElementById("no-devices").style.display = data.devices.length ? "none" : "block";
     for (const d of data.devices) {
+      byId[d.id] = d;
       let card = document.getElementById("dev-"+d.id);
       if (!card) {
         card = document.createElement("div"); card.className="card"; card.id="dev-"+d.id;
@@ -125,10 +127,18 @@
         card.innerHTML = '<div class="dev-head">'+
           '<span class="drag-grip" draggable="true" title="Drag to reorder">⠿</span>'+
           '<span class="pill unknown"></span>'+
-          '<span class="name"></span><span class="host"></span></div>'+
+          '<span class="name device-clickable" title="Open detailed view"></span><span class="host"></span>'+
+          '<button class="btn small tile-edit" style="margin-left:auto;" title="Edit device">Edit</button></div>'+
           '<div class="stats"></div><div class="mini-chart"></div>';
         grid.appendChild(card);
         const grip = card.querySelector(".drag-grip"), theCard = card;
+        card.querySelector(".tile-edit").addEventListener("click", e => {
+          e.stopPropagation();
+          const dd = byId[theCard.dataset.id]; if (dd) deviceEditModal(dd, refresh);
+        });
+        card.querySelector(".name").addEventListener("click", e => {
+          e.stopPropagation(); if (!dragging) deviceDetailModal(theCard.dataset.id);
+        });
         grip.addEventListener("dragstart", e => {
           dragCard = theCard; dragging = true;
           e.dataTransfer.effectAllowed = "move";
@@ -157,6 +167,7 @@
         stat("1 h max", ms(d.hour_max, d.eff_warn, d.eff_crit)) +
         stat("1 h loss", d.hour_loss==null?'<span class="muted">—</span>':
           '<span class="'+(d.hour_loss>0?"v-crit":"v-good")+'">'+d.hour_loss.toFixed(1)+'<span class="unit"> %</span></span>') +
+        stat("Failed pings", '<span class="'+((d.fail_total||0)>0?"v-crit":"v-good")+'">'+(d.fail_total||0)+'</span>') +
         stat("Checked", '<span class="muted">'+fmtAgo(d.last_ts)+'</span>');
     }
     const ids = new Set(data.devices.map(d=>"dev-"+d.id));

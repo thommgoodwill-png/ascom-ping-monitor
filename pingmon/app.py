@@ -384,6 +384,23 @@ def register_routes(app):
                                site=site, page_sub="sla",
                                theme=settings.get("default_theme"))
 
+    @app.route("/sites/<int:site_id>/settings")
+    @login_required
+    def site_settings_page(site_id):
+        site = database.get_site(site_id)
+        if not site:
+            return redirect(url_for("customers_page"))
+        return render_template("site_settings.html", page="customers",
+                               site_id=site_id, site=site, page_sub="settings",
+                               theme=settings.get("default_theme"))
+
+    @app.route("/api/sites/<int:site_id>/clear", methods=["POST"])
+    @admin_required
+    def api_site_clear(site_id):
+        if not database.get_site(site_id):
+            return jsonify(error="not found"), 404
+        return jsonify(cleared=database.clear_site_data(site_id))
+
     # ---------------- API: customers / sites ----------------
 
     @app.route("/api/customers")
@@ -835,6 +852,63 @@ def register_routes(app):
     def api_delete_device(dev_id):
         database.delete_device(dev_id)
         return jsonify(ok=True)
+
+    @app.route("/api/devices/<int:dev_id>/detail")
+    @login_required
+    def api_device_detail(dev_id):
+        d = database.get_device(dev_id)
+        if not d:
+            return jsonify(error="not found"), 404
+        try:
+            seconds = max(300, min(90 * 86400, int(request.args.get("seconds", 3600))))
+        except ValueError:
+            seconds = 3600
+        now = time.time()
+        start = now - seconds
+        g_warn, g_crit = settings.get("warn_ms"), settings.get("crit_ms")
+        eff_warn = d.get("warn_override") or g_warn
+        eff_crit = d.get("crit_override") or g_crit
+        stats = database.device_stats(dev_id, start, now, eff_warn, eff_crit)
+        series, bucket = database.device_history(dev_id, start, now)
+        events = database.device_events(dev_id, limit=60)
+        live = monitor.status().get(dev_id, {})
+        last = database.last_ping(dev_id)
+        # outages / downtime reconstructed from down/up events inside the window
+        evs = sorted((e for e in database.device_events(dev_id, 500, since=start)
+                      if e["type"] in ("down", "up")), key=lambda e: e["ts"])
+        outages, down_at = [], None
+        for e in evs:
+            if e["type"] == "down" and down_at is None:
+                down_at = e["ts"]
+            elif e["type"] == "up" and down_at is not None:
+                outages.append(e["ts"] - down_at); down_at = None
+        if down_at is not None:
+            outages.append(now - down_at)
+        downtime = sum(outages)
+        sent = stats["sent"] or 0
+        ok = stats["ok"] or 0
+        return jsonify(
+            device={**d, "vendor": oui.vendor(d.get("mac")),
+                    "eff_warn": eff_warn, "eff_crit": eff_crit,
+                    "state": (live.get("state", "unknown") if d["enabled"] else "disabled"),
+                    "last_latency": live.get("last_latency") if live else
+                                    (last["latency"] if last else None),
+                    "last_ts": last["ts"] if last else None,
+                    "last_success": bool(last["success"]) if last else None,
+                    "checks": live.get("checks", {})},
+            stats={
+                "sent": sent, "ok": ok,
+                "avg": round(stats["avg_l"], 1) if stats["avg_l"] is not None else None,
+                "max": round(stats["max_l"], 1) if stats["max_l"] is not None else None,
+                "min": round(stats["min_l"], 1) if stats["min_l"] is not None else None,
+                "jitter": round(stats["avg_j"], 1) if stats["avg_j"] is not None else None,
+                "loss": round((sent - ok) / sent * 100, 2) if sent else None,
+                "warns": stats["warns"] or 0, "crits": stats["crits"] or 0,
+                "uptime_pct": round(100.0 * (1 - downtime / max(seconds, 1)), 3),
+                "downtime_s": round(downtime), "outage_count": len(outages),
+                "failed": d.get("fail_total", 0)},
+            series=series, bucket=bucket, start=start, end=now,
+            warn_ms=eff_warn, crit_ms=eff_crit, events=events)
 
     # ---------------- API: history / events ----------------
 

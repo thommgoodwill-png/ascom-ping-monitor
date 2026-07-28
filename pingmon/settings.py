@@ -158,7 +158,7 @@ CLAMPS = {
     "capture_max_packets": (10, 100000),
     "cert_warn_days": (1, 365),
     "rogue_scan_interval_min": (5, 1440),
-    "imt_poll_secs": (5, 3600),
+    "imt_poll_secs": (1, 3600),
     "imt_service_stale_secs": (30, 3600),
     "tel_db_port": (1, 65535),
     "feed_port": (0, 65535),

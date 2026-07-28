@@ -145,7 +145,10 @@
 
       const tdName = document.createElement("td");
       tdName.style.fontWeight = "600";
+      tdName.className = "device-clickable";
+      tdName.title = "Open detailed view";
       tdName.textContent = d.name;
+      tdName.addEventListener("click", () => deviceDetailModal(d.id));
       tr.appendChild(tdName);
       const tdHost = document.createElement("td");
       tdHost.textContent = d.host;
@@ -189,7 +192,7 @@
       const edit = document.createElement("button");
       edit.className = "btn small";
       edit.textContent = "Edit";
-      edit.addEventListener("click", () => editDevice(d));
+      edit.addEventListener("click", () => deviceEditModal(d, load));
       const del = document.createElement("button");
       del.className = "btn small danger";
       del.style.marginLeft = "6px";
@@ -203,31 +206,6 @@
       tr.appendChild(tdAct);
       tb.appendChild(tr);
     }
-  }
-
-  function editDevice(d) {
-    const name = prompt("Device name:", d.name);
-    if (name === null) return;
-    const host = prompt("IP address or hostname:", d.host);
-    if (host === null) return;
-    const iv = prompt("Ping interval override in seconds (0.2–60, blank = use global):",
-                      d.interval_override || "");
-    if (iv === null) return;
-    const wo = prompt("Warning threshold override in ms (blank = global):",
-                      d.warn_override || "");
-    if (wo === null) return;
-    const co = prompt("Critical threshold override in ms (blank = global):",
-                      d.crit_override || "");
-    if (co === null) return;
-    api("/api/devices/" + d.id, {
-      method: "PUT",
-      body: JSON.stringify({
-        name: name, host: host,
-        interval_override: iv === "" ? null : iv,
-        warn_override: wo === "" ? null : wo,
-        crit_override: co === "" ? null : co,
-      }),
-    }).then(load).catch(e => toast(e.message, true));
   }
 
   document.getElementById("add-btn").addEventListener("click", async () => {

@@ -36,6 +36,7 @@
   let rangeSec = 3600;
   let overview = null;
   const miniCharts = new Map();
+  const byId = {};   // latest device object per id (for the edit/detail modals)
   let refreshTimer = null;
   let refreshSeconds = 30;
 
@@ -78,16 +79,26 @@
       data.devices.length ? "none" : "block";
 
     for (const d of data.devices) {
+      byId[d.id] = d;
       let card = document.getElementById("dev-" + d.id);
       if (!card) {
         card = document.createElement("div");
         card.className = "card";
         card.id = "dev-" + d.id;
+        card.dataset.id = d.id;
         card.innerHTML =
           '<div class="dev-head"><span class="pill unknown"></span>' +
-          '<span class="name"></span><span class="host"></span></div>' +
+          '<span class="name device-clickable" title="Open detailed view"></span><span class="host"></span>' +
+          '<button class="btn small tile-edit" style="margin-left:auto;" title="Edit device">Edit</button></div>' +
           '<div class="stats"></div><div class="mini-chart"></div>';
         grid.appendChild(card);
+        const theCard = card;
+        card.querySelector(".tile-edit").addEventListener("click", e => {
+          e.stopPropagation();
+          const dd = byId[theCard.dataset.id]; if (dd) deviceEditModal(dd, loadDevices);
+        });
+        card.querySelector(".name").addEventListener("click", () =>
+          deviceDetailModal(theCard.dataset.id));
       }
       const [cls, label] = pillFor(d);
       const pill = card.querySelector(".pill");
@@ -107,6 +118,8 @@
         stat("1 h loss", d.hour_loss == null ? '<span class="muted">—</span>' :
           '<span class="' + (d.hour_loss > 0 ? "v-crit" : "v-good") + '">' +
           d.hour_loss.toFixed(1) + '<span class="unit"> %</span></span>') +
+        stat("Failed pings", '<span class="' + ((d.fail_total || 0) > 0 ? "v-crit" : "v-good") +
+          '">' + (d.fail_total || 0) + "</span>") +
         stat("Checked", '<span class="muted">' + fmtAgo(d.last_ts) + "</span>");
       // service-check badges (TCP ports / HTTP / DNS)
       let checksBox = card.querySelector(".checks");

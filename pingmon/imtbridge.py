@@ -50,7 +50,7 @@ from . import database, settings
 log = logging.getLogger("pingmon.imt")
 
 SITE_ID = None   # this reader always represents the LOCAL bridge for this instance
-READER_VERSION = "2.9"   # bump on reader changes so the running build is identifiable
+READER_VERSION = "2.12"  # bump on reader changes so the running build is identifiable
 STATE_PATH = os.path.join(database.DATA_DIR, "imt_state.json")
 
 # A log line starts with "2026-02-11 15:08:31,039 ".
@@ -708,7 +708,7 @@ class ImtBridge:
                 self._stop.wait(backoff)
                 backoff = min(60, backoff * 2)
                 continue
-            self._stop.wait(max(5, cfg["poll"]))
+            self._stop.wait(max(1, cfg["poll"]))
 
     def _poll(self, cfg):
         # 0) is the bridge service itself alive? (runs first — needs no DB read)

@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_site_subnav.html" %}
+<h1 class="page-title" id="site-title">Site settings</h1>
+
+<div class="card">
+  <h2>Stored data</h2>
+  <p class="card-sub">Clear the stored ping history, events and the failed-ping
+    tallies for every device at this site. The devices themselves are kept — only
+    their recorded data is wiped, and it starts filling again on the next ping.</p>
+
+  <div id="clear-summary" class="muted" style="font-size:13px;margin-bottom:12px;"></div>
+
+  <button class="btn danger" id="clear-btn">Clear stored data for this site</button>
+  <div id="clear-out" class="muted" style="margin-top:10px;font-size:13px;"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  const SID = {{ site_id }};
+
+  async function loadSummary() {
+    try {
+      const d = await api("/api/sites/" + SID);
+      document.getElementById("site-title").textContent = d.site.name + " · settings";
+      let totalFails = 0;
+      for (const dev of d.devices) totalFails += (dev.fail_total || 0);
+      document.getElementById("clear-summary").textContent =
+        d.devices.length + " device(s) at this site · "
+        + totalFails + " failed ping event(s) tallied.";
+    } catch (e) {}
+  }
+
+  document.getElementById("clear-btn").addEventListener("click", async () => {
+    if (!confirm("Clear ALL stored ping history, events and failed-ping tallies "
+                 + "for this site? The devices are kept; this cannot be undone.")) return;
+    const out = document.getElementById("clear-out");
+    out.textContent = "Clearing…";
+    try {
+      const r = await api("/api/sites/" + SID + "/clear", { method: "POST", body: "{}" });
+      const c = r.cleared || {};
+      out.innerHTML = '<span class="v-good">✓ Cleared '
+        + (c.pings || 0) + ' ping row(s) and ' + (c.events || 0)
+        + ' event(s) across ' + (c.devices || 0) + ' device(s). Tallies reset.</span>';
+      loadSummary();
+    } catch (e) {
+      out.innerHTML = '<span class="v-crit">✗ ' + e.message + '</span>';
+    }
+  });
+
+  loadSummary();
+})();
+</script>
+{% endblock %}

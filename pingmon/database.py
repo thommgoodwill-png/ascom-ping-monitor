@@ -91,6 +91,8 @@ def init_db():
     # agent: 1 = this device was pulled DOWN from the hub (a mirror); 0/NULL =
     # added locally on the agent and pushed UP to the hub.
     _ensure_column(db, "devices", "from_hub", "from_hub INTEGER DEFAULT 0")
+    # running tally of failed ping events for this device (reset on 'clear data')
+    _ensure_column(db, "devices", "fail_total", "fail_total INTEGER NOT NULL DEFAULT 0")
     db.execute("""CREATE TABLE IF NOT EXISTS known_devices (
         mac TEXT PRIMARY KEY,
         ip TEXT, vendor TEXT, name TEXT,
@@ -661,6 +663,26 @@ def delete_device(dev_id):
     db.commit()
 
 
+def clear_site_data(site_id):
+    """Wipe stored ping history, events and the failed-ping tally for every
+    device at a site — keeps the devices themselves. Returns rows cleared."""
+    db = get_db()
+    devs = [r["id"] for r in db.execute(
+        "SELECT id FROM devices WHERE site_id=?", (site_id,)).fetchall()]
+    if not devs:
+        return {"devices": 0, "pings": 0, "events": 0}
+    ph = ",".join("?" * len(devs))
+    pings = db.execute(f"SELECT COUNT(*) FROM pings WHERE device_id IN ({ph})",
+                       devs).fetchone()[0]
+    events = db.execute(f"SELECT COUNT(*) FROM events WHERE device_id IN ({ph})",
+                        devs).fetchone()[0]
+    db.execute(f"DELETE FROM pings WHERE device_id IN ({ph})", devs)
+    db.execute(f"DELETE FROM events WHERE device_id IN ({ph})", devs)
+    db.execute(f"UPDATE devices SET fail_total=0 WHERE id IN ({ph})", devs)
+    db.commit()
+    return {"devices": len(devs), "pings": pings, "events": events}
+
+
 # ---------- pings ----------
 
 def record_ping(device_id, ts, latency, success, jitter=None):
@@ -668,6 +690,9 @@ def record_ping(device_id, ts, latency, success, jitter=None):
     db.execute("INSERT INTO pings(device_id, ts, latency, success, jitter)"
                " VALUES(?,?,?,?,?)",
                (device_id, ts, latency, 1 if success else 0, jitter))
+    if not success:
+        db.execute("UPDATE devices SET fail_total=fail_total+1 WHERE id=?",
+                   (device_id,))
     db.commit()
 
 
@@ -699,6 +724,40 @@ def history(start, end, max_points=500):
             r["fails"], r["n"],
             round(r["avg_j"], 2) if r["avg_j"] is not None else None])
     return out, bucket
+
+
+def device_history(device_id, start, end, max_points=500):
+    """Bucketed latency history for a SINGLE device (for the detail modal chart).
+    Returns ([[bucket_ts, avg, max, fails, count, avg_jitter], ...], bucket_secs)."""
+    span = max(end - start, 1)
+    bucket = max(1, int(span / max_points))
+    rows = get_db().execute(
+        """SELECT CAST((ts - ?) / ? AS INTEGER) AS b,
+                  AVG(latency) AS avg_l, MAX(latency) AS max_l,
+                  SUM(CASE WHEN success=0 THEN 1 ELSE 0 END) AS fails,
+                  COUNT(*) AS n, AVG(jitter) AS avg_j
+           FROM pings WHERE device_id=? AND ts >= ? AND ts <= ?
+           GROUP BY b ORDER BY b""",
+        (start, bucket, device_id, start, end)).fetchall()
+    out = []
+    for r in rows:
+        ts = start + r["b"] * bucket + bucket / 2
+        out.append([round(ts, 1),
+                    round(r["avg_l"], 2) if r["avg_l"] is not None else None,
+                    round(r["max_l"], 2) if r["max_l"] is not None else None,
+                    r["fails"], r["n"],
+                    round(r["avg_j"], 2) if r["avg_j"] is not None else None])
+    return out, bucket
+
+
+def device_events(device_id, limit=50, since=None):
+    """Recent down/up/loss events for one device, newest first."""
+    q = "SELECT ts, type, detail FROM events WHERE device_id=?"
+    vals = [device_id]
+    if since is not None:
+        q += " AND ts >= ?"; vals.append(since)
+    q += " ORDER BY ts DESC LIMIT ?"; vals.append(limit)
+    return [dict(r) for r in get_db().execute(q, vals).fetchall()]
 
 
 def device_stats(device_id, start, end, warn_ms, crit_ms):
@@ -1063,6 +1122,10 @@ def record_pushed_pings(device_id, samples):
         "INSERT INTO pings(device_id, ts, latency, success, jitter) VALUES(?,?,?,?,?)",
         [(device_id, s[0], s[1], 1 if s[2] else 0,
           s[3] if len(s) > 3 else None) for s in samples])
+    fails = sum(1 for s in samples if not s[2])
+    if fails:
+        db.execute("UPDATE devices SET fail_total=fail_total+? WHERE id=?",
+                   (fails, device_id))
     db.commit()
 
 
