@@ -49,6 +49,11 @@ def site_auth(f):
 def config(site):
     """Devices this site's agent should monitor, plus global thresholds."""
     g_warn, g_crit = settings.get("warn_ms"), settings.get("crit_ms")
+    # per-site defaults sit BETWEEN the device override and the controller global:
+    #   device override  ->  site default  ->  controller global
+    site_iv = site.get("ping_interval")
+    site_warn = site.get("warn_ms")
+    site_crit = site.get("crit_ms")
     devices = []
     for d in database.list_devices(site_id=site["id"]):
         devices.append({
@@ -56,9 +61,9 @@ def config(site):
             "name": d["name"],
             "host": d["host"],
             "enabled": d["enabled"],
-            "interval": d.get("interval_override") or settings.get("ping_interval"),
-            "warn_ms": d.get("warn_override") or g_warn,
-            "crit_ms": d.get("crit_override") or g_crit,
+            "interval": d.get("interval_override") or site_iv or settings.get("ping_interval"),
+            "warn_ms": d.get("warn_override") or site_warn or g_warn,
+            "crit_ms": d.get("crit_override") or site_crit or g_crit,
             "tcp_ports": d.get("tcp_ports") or "",
             "check_url": d.get("check_url") or "",
         })

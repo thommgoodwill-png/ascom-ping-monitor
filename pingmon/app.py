@@ -401,6 +401,27 @@ def register_routes(app):
             return jsonify(error="not found"), 404
         return jsonify(cleared=database.clear_site_data(site_id))
 
+    @app.route("/api/sites/<int:site_id>/settings", methods=["POST"])
+    @admin_required
+    def api_site_settings(site_id):
+        if not database.get_site(site_id):
+            return jsonify(error="not found"), 404
+        data = request.get_json(force=True) or {}
+        fields = {}
+        # each is optional; blank/None clears it back to the controller global
+        if "ping_interval" in data:
+            fields["ping_interval"] = _parse_interval(data["ping_interval"])
+        if "warn_ms" in data:
+            fields["warn_ms"] = _parse_ms(data["warn_ms"])
+        if "crit_ms" in data:
+            fields["crit_ms"] = _parse_ms(data["crit_ms"])
+        if fields:
+            database.update_site(site_id, **fields)
+        site = database.get_site(site_id)
+        return jsonify(ok=True, settings={
+            "ping_interval": site.get("ping_interval"),
+            "warn_ms": site.get("warn_ms"), "crit_ms": site.get("crit_ms")})
+
     # ---------------- API: customers / sites ----------------
 
     @app.route("/api/customers")
@@ -470,8 +491,8 @@ def register_routes(app):
         out = []
         for d in database.list_devices(site_id=site_id):
             st = live.get(d["id"], {})   # only populated if the hub also pings it
-            eff_warn = d.get("warn_override") or warn
-            eff_crit = d.get("crit_override") or crit
+            eff_warn = d.get("warn_override") or site.get("warn_ms") or warn
+            eff_crit = d.get("crit_override") or site.get("crit_ms") or crit
             stats = database.device_stats(d["id"], now - 3600, now, eff_warn, eff_crit)
             sent = stats["sent"] or 0
             ok = stats["ok"] or 0
@@ -496,7 +517,8 @@ def register_routes(app):
     @app.route("/api/sites/<int:site_id>/history")
     @login_required
     def api_site_history(site_id):
-        if not database.get_site(site_id):
+        site = database.get_site(site_id)
+        if not site:
             return jsonify(error="not found"), 404
         try:
             seconds = max(60, min(90 * 86400, int(request.args.get("seconds", 3600))))
@@ -506,10 +528,11 @@ def register_routes(app):
         start = end - seconds
         series, bucket = database.history(start, end)
         g_warn, g_crit = settings.get("warn_ms"), settings.get("crit_ms")
+        s_warn, s_crit = site.get("warn_ms"), site.get("crit_ms")
         devs = database.list_devices(enabled_only=True, site_id=site_id)
         devices = [{"id": d["id"], "name": d["name"], "host": d["host"],
-                    "eff_warn": d.get("warn_override") or g_warn,
-                    "eff_crit": d.get("crit_override") or g_crit} for d in devs]
+                    "eff_warn": d.get("warn_override") or s_warn or g_warn,
+                    "eff_crit": d.get("crit_override") or s_crit or g_crit} for d in devs]
         keep = {d["id"] for d in devs}
         return jsonify(start=start, end=end, bucket=bucket,
                        warn_ms=g_warn, crit_ms=g_crit, devices=devices,
@@ -866,8 +889,10 @@ def register_routes(app):
         now = time.time()
         start = now - seconds
         g_warn, g_crit = settings.get("warn_ms"), settings.get("crit_ms")
-        eff_warn = d.get("warn_override") or g_warn
-        eff_crit = d.get("crit_override") or g_crit
+        # site defaults sit between the device override and the global
+        s = database.get_site(d["site_id"]) if d.get("site_id") else None
+        eff_warn = d.get("warn_override") or (s.get("warn_ms") if s else None) or g_warn
+        eff_crit = d.get("crit_override") or (s.get("crit_ms") if s else None) or g_crit
         stats = database.device_stats(dev_id, start, now, eff_warn, eff_crit)
         series, bucket = database.device_history(dev_id, start, now)
         events = database.device_events(dev_id, limit=60)

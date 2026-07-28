@@ -112,6 +112,12 @@ def init_db():
         agent_version TEXT,
         agent_host TEXT)""")
     _ensure_column(db, "sites", "agent_diag", "agent_diag TEXT")  # agent self-report (JSON)
+    # per-site agent defaults (NULL = inherit the controller global). Safe to
+    # change live — they only affect ping cadence / display thresholds, never
+    # the agent's connection.
+    _ensure_column(db, "sites", "ping_interval", "ping_interval REAL")
+    _ensure_column(db, "sites", "warn_ms", "warn_ms REAL")
+    _ensure_column(db, "sites", "crit_ms", "crit_ms REAL")
     # ---- users / roles / 2FA ----
     db.execute("""CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1074,7 +1080,7 @@ def add_site(customer_id, name, api_key, notes=""):
 
 def update_site(site_id, **fields):
     allowed = {"name", "notes", "api_key", "last_seen", "agent_version",
-               "agent_host", "agent_diag"}
+               "agent_host", "agent_diag", "ping_interval", "warn_ms", "crit_ms"}
     sets, vals = [], []
     for k, v in fields.items():
         if k in allowed:
