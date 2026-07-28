@@ -194,7 +194,19 @@
       ctx.lineWidth = 2;
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
-      const maxGap = (o.bucket || 60) * 3; // break line across missing data
+      // Break the line only across a REAL gap. Base the threshold on the data's
+      // own cadence (median spacing between present points) so a slow ping
+      // interval — e.g. 30s pings inside 7s buckets — still draws a continuous
+      // line, while a genuine outage (several missed samples) still breaks it.
+      let cadence = o.bucket || 60;
+      const present = s.data.filter(p => p[1] != null);
+      if (present.length >= 3) {
+        const diffs = [];
+        for (let i = 1; i < present.length; i++) diffs.push(present[i][0] - present[i - 1][0]);
+        diffs.sort((a, b) => a - b);
+        cadence = Math.max(cadence, diffs[Math.floor(diffs.length / 2)]); // median
+      }
+      const maxGap = cadence * 3;
       let prev = null;
       for (const p of s.data) {
         if (p[1] == null) { prev = null; continue; }
