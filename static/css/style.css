@@ -289,3 +289,27 @@ h1.page-title { font-size: 20px; margin: 0 0 16px; }
   gap: 12px 18px; margin: 12px 0 4px;
 }
 .device-clickable { cursor: pointer; }
+
+/* ---------- device flag colour swatches ---------- */
+.color-swatches { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+.swatch {
+  width: 26px; height: 26px; border-radius: 6px; cursor: pointer;
+  border: 2px solid var(--border); padding: 0; background: transparent;
+  transition: transform .06s ease;
+}
+.swatch:hover { transform: scale(1.1); }
+.swatch.sel { border-color: var(--text); box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--text); }
+.swatch.none { position: relative; background: var(--surface-2); }
+.swatch.none::after {
+  content: ""; position: absolute; left: 3px; right: 3px; top: 11px;
+  height: 2px; background: var(--crit-text); transform: rotate(-45deg);
+}
+.flag-dot {
+  display: inline-block; width: 10px; height: 10px; border-radius: 3px;
+  margin-right: 7px; vertical-align: middle;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.15);
+}
+
+/* ---------- footer build tag ---------- */
+.app-foot { text-align: center; padding: 18px 0 26px; font-size: 12px; }
+.app-foot .muted { opacity: .7; }

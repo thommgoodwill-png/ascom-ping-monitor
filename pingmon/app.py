@@ -122,6 +122,10 @@ def create_app():
         ctx["current_user"] = session.get("username")
         ctx["current_role"] = session.get("role", "standard")
         ctx["is_admin"] = session.get("role") == "admin"
+        # cache-buster for static assets: bump with the build so browsers always
+        # fetch the new JS/CSS after a deploy instead of serving a stale cache
+        from . import imtbridge as _ib
+        ctx["asset_ver"] = _ib.READER_VERSION
         return ctx
 
     from .agentapi import bp as agent_bp
@@ -867,6 +871,8 @@ def register_routes(app):
                                            netcheck.parse_ports(data["tcp_ports"]))
         if "check_url" in data:
             fields["check_url"] = str(data["check_url"] or "").strip()[:300]
+        if "tile_color" in data:
+            fields["tile_color"] = _clean_color(data["tile_color"])
         database.update_device(dev_id, **fields)
         return jsonify(ok=True)
 
@@ -1910,6 +1916,15 @@ def _make_qr_svg(data):
         return buf.getvalue().decode("utf-8")
     except Exception:
         return None
+
+
+_HEX_RE = __import__("re").compile(r"^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$")
+
+
+def _clean_color(value):
+    """Only a plain hex colour (#rgb / #rrggbb) or blank — never arbitrary CSS."""
+    v = str(value or "").strip()
+    return v if _HEX_RE.match(v) else ""
 
 
 def _parse_interval(value):

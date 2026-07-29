@@ -93,6 +93,8 @@ def init_db():
     _ensure_column(db, "devices", "from_hub", "from_hub INTEGER DEFAULT 0")
     # running tally of failed ping events for this device (reset on 'clear data')
     _ensure_column(db, "devices", "fail_total", "fail_total INTEGER NOT NULL DEFAULT 0")
+    # optional flag colour for the device tile (hex, e.g. #e5484d; NULL = default)
+    _ensure_column(db, "devices", "tile_color", "tile_color TEXT")
     db.execute("""CREATE TABLE IF NOT EXISTS known_devices (
         mac TEXT PRIMARY KEY,
         ip TEXT, vendor TEXT, name TEXT,
@@ -641,7 +643,7 @@ def reorder_devices(ids):
 def update_device(dev_id, **fields):
     allowed = {"name", "host", "enabled", "interval_override", "sort",
                "warn_override", "crit_override", "tcp_ports", "check_url",
-               "site_id", "hub_id", "from_hub"}
+               "site_id", "hub_id", "from_hub", "tile_color"}
     sets, vals = [], []
     for k, v in fields.items():
         if k in allowed:

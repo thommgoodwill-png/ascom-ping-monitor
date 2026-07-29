@@ -121,6 +121,7 @@
         stat("Failed pings", '<span class="' + ((d.fail_total || 0) > 0 ? "v-crit" : "v-good") +
           '">' + (d.fail_total || 0) + "</span>") +
         stat("Checked", '<span class="muted">' + fmtAgo(d.last_ts) + "</span>");
+      applyTileColor(card, d.tile_color);
       // service-check badges (TCP ports / HTTP / DNS)
       let checksBox = card.querySelector(".checks");
       if (!checksBox) {

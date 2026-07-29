@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}Ascom Network Monitor{% endblock %}</title>
 <link rel="icon" href="{{ favicon_url }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v={{ asset_ver }}">
 <script>
   // apply saved theme before first paint to avoid flash
   (function () {
@@ -49,8 +49,9 @@
   {% if page in tel_pages %}{% include "_tel_subnav.html" %}{% endif %}
   {% block content %}{% endblock %}
 </main>
-<script src="{{ url_for('static', filename='js/app.js') }}"></script>
-<script src="{{ url_for('static', filename='js/charts.js') }}"></script>
+<footer class="app-foot"><span class="muted">Ascom Network Monitor · build v{{ asset_ver }}</span></footer>
+<script src="{{ url_for('static', filename='js/app.js') }}?v={{ asset_ver }}"></script>
+<script src="{{ url_for('static', filename='js/charts.js') }}?v={{ asset_ver }}"></script>
 <script>initTheme("{{ theme }}");</script>
 <script>
   (function () {

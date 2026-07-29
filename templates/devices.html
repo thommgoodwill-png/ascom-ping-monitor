@@ -147,7 +147,12 @@
       tdName.style.fontWeight = "600";
       tdName.className = "device-clickable";
       tdName.title = "Open detailed view";
-      tdName.textContent = d.name;
+      if (d.tile_color) {
+        const dot = document.createElement("span");
+        dot.className = "flag-dot"; dot.style.background = d.tile_color;
+        tdName.appendChild(dot);
+      }
+      tdName.appendChild(document.createTextNode(d.name));
       tdName.addEventListener("click", () => deviceDetailModal(d.id));
       tr.appendChild(tdName);
       const tdHost = document.createElement("td");

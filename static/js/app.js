@@ -106,6 +106,41 @@
     try { return new Date(ts * 1000).toLocaleString(); } catch (_) { return "—"; }
   }
 
+  // ---- device flag colour (tile background) ----
+  // preset flags shown in the picker; value stored is the hex string
+  window.TILE_COLORS = [
+    { name: "None", hex: "" },
+    { name: "Red", hex: "#e5484d" },
+    { name: "Orange", hex: "#f5a524" },
+    { name: "Yellow", hex: "#e2c50a" },
+    { name: "Green", hex: "#30a46c" },
+    { name: "Blue", hex: "#3b82f6" },
+    { name: "Purple", hex: "#8b5cf6" },
+    { name: "Pink", hex: "#e93d82" },
+    { name: "Grey", hex: "#8b8f98" },
+  ];
+  window.hexToRgba = function (hex, a) {
+    hex = (hex || "").replace("#", "");
+    if (hex.length === 3) hex = hex.split("").map(c => c + c).join("");
+    if (hex.length !== 6) return null;
+    const n = parseInt(hex, 16);
+    if (isNaN(n)) return null;
+    return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
+  };
+  // apply a flag colour to a card as a subtle tint + left accent (theme-safe:
+  // the tint overlays the existing surface, so text stays readable in dark mode)
+  window.applyTileColor = function (card, hex) {
+    if (!card) return;
+    const bg = hexToRgba(hex, 0.14), bd = hexToRgba(hex, 0.85);
+    if (bg) {
+      card.style.backgroundImage = "linear-gradient(" + bg + "," + bg + ")";
+      card.style.borderLeft = "4px solid " + bd;
+    } else {
+      card.style.backgroundImage = "";
+      card.style.borderLeft = "";
+    }
+  };
+
   // ---- reusable modal ----
   let _onClose = null;
   function _modalKey(e) { if (e.key === "Escape") window.closeModal(); }
@@ -157,6 +192,9 @@
         '<input id="ed-url" placeholder="https://host/health"></div>' +
         '<div style="display:flex;align-items:flex-end;"><label style="display:inline-flex;gap:8px;align-items:center;">' +
         '<span class="switch"><input type="checkbox" id="ed-en"><span class="track"></span></span>Enabled</label></div></div>' +
+      '<div class="f-row"><div style="flex:1;"><label class="f-label">Flag colour ' +
+        '<span class="muted">(tile background — for easy identification)</span></label>' +
+        '<div id="ed-colors" class="color-swatches"></div></div></div>' +
       '<div class="f-help">Interval / warn / crit blank = use the global default. Changes to a ' +
         'customer-site device are pushed to its agent on the next sync.</div>' +
       '<div style="display:flex;gap:8px;margin-top:14px;"><button class="btn primary" id="ed-save">Save</button>' +
@@ -168,6 +206,22 @@
     g("#ed-iv").value = dev.interval_override || ""; g("#ed-warn").value = dev.warn_override || "";
     g("#ed-crit").value = dev.crit_override || ""; g("#ed-ports").value = dev.tcp_ports || "";
     g("#ed-url").value = dev.check_url || ""; g("#ed-en").checked = !!dev.enabled;
+    // flag colour picker
+    let chosen = dev.tile_color || "";
+    const cbox = g("#ed-colors");
+    function renderSwatches() {
+      cbox.innerHTML = "";
+      for (const c of window.TILE_COLORS) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "swatch" + (chosen === c.hex ? " sel" : "") + (c.hex ? "" : " none");
+        b.title = c.name;
+        if (c.hex) b.style.background = c.hex;
+        b.addEventListener("click", () => { chosen = c.hex; renderSwatches(); });
+        cbox.appendChild(b);
+      }
+    }
+    renderSwatches();
     g("#ed-cancel").addEventListener("click", window.closeModal);
     g("#ed-save").addEventListener("click", async () => {
       const b = {
@@ -178,6 +232,7 @@
         crit_override: g("#ed-crit").value.trim() || null,
         tcp_ports: g("#ed-ports").value.trim(),
         check_url: g("#ed-url").value.trim(),
+        tile_color: chosen,
       };
       if (!b.name || !b.host) {
         g("#ed-msg").innerHTML = '<span class="v-crit">Name and host are required</span>'; return;
