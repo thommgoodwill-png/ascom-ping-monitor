@@ -1,0 +1,465 @@
+{% extends "base.html" %}
+{% block content %}
+{% if site %}
+  {% include "_site_subnav.html" %}
+  <h1 class="page-title">Telligence — {{ site.name }}</h1>
+  <p class="card-sub" style="margin-top:-6px;">Live nurse-call activity and device
+    health from this site's Telligence IMT bridge, pushed up by the site agent.</p>
+{% else %}
+  <h1 class="page-title">Telligence Monitoring</h1>
+  <p class="card-sub" style="margin-top:-6px;">Live nurse-call activity and device
+    health, read straight from the Ascom/Telligence IMT bridge on the server.</p>
+{% endif %}
+
+<style>
+  .call-board { display:flex; flex-direction:column; gap:10px; }
+  .call-card { display:flex; align-items:stretch; gap:14px; border:1px solid var(--border);
+    border-radius:10px; padding:12px 14px 12px 0; overflow:hidden; background:var(--card); }
+  .call-bar { width:8px; flex:0 0 8px; border-radius:8px 0 0 8px; margin-right:2px; }
+  .call-main { flex:1; min-width:0; padding-left:12px; }
+  .call-room { font-size:20px; font-weight:800; line-height:1.2; }
+  .call-type { font-size:14px; color:var(--muted); margin-top:2px; }
+  .call-loc { font-size:11px; color:var(--muted); font-family:monospace; margin-top:2px; }
+  .call-side { text-align:right; display:flex; flex-direction:column; align-items:flex-end;
+    justify-content:center; gap:6px; padding-right:14px; white-space:nowrap; }
+  .call-dur { font-size:22px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .cat-emergency { background:#DA291C; } .call-card.cat-emergency { border-color:#DA291C55; }
+  .cat-wc        { background:#e8590c; } .call-card.cat-wc { border-color:#e8590c55; }
+  .cat-call      { background:#f08c00; }
+  .cat-presence  { background:#2f9e44; }
+  .cat-staff     { background:#1c7ed6; }
+  .cat-other     { background:#868e96; }
+  .call-empty { text-align:center; padding:34px 10px; }
+  .call-empty .big { font-size:22px; font-weight:800; color:#2f9e44; }
+  .cbadge { font-size:12px; font-weight:700; padding:2px 9px; border-radius:20px; color:#fff; }
+</style>
+
+<!-- ---------- status ---------- -->
+<div class="card">
+  <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+    <span class="pill" id="imt-pill">…</span>
+    <span class="muted" id="imt-meta"></span>
+    <span class="spacer" style="flex:1;"></span>
+    <div class="stats" style="margin:0;">
+      <div class="stat"><div class="label">Active calls</div><div class="value small" id="imt-calls">0</div></div>
+      <div class="stat"><div class="label">Emergency</div><div class="value small v-crit" id="imt-emg">0</div></div>
+      <div class="stat"><div class="label">Faults</div><div class="value small v-crit" id="imt-failed">0</div></div>
+      <div class="stat"><div class="label">Devices</div><div class="value small" id="imt-total">0</div></div>
+    </div>
+  </div>
+  <div id="imt-err" class="login-error" style="display:none;margin-top:10px;"></div>
+</div>
+
+<div class="filter-row" style="margin:4px 0 12px;">
+  <div class="range-group" id="imt-view">
+    <button class="range-btn active" data-v="calls">Calls</button>
+    <button class="range-btn" data-v="devices">Device health</button>
+    {% if not site %}<button class="range-btn" data-v="messages">Log feed</button>{% endif %}
+    <button class="range-btn" data-v="events">Fault events</button>
+  </div>
+</div>
+
+<!-- ---------- LIVE CALLS ---------- -->
+<div class="imt-view" data-view="calls">
+  <div class="range-group" id="imt-duty-tabs" style="margin-bottom:12px;flex-wrap:wrap;display:none;"></div>
+  <div class="card">
+    <h2 style="margin-bottom:12px;">Calls on the system now <span class="muted" id="imt-duty-label" style="font-weight:400;font-size:14px;"></span></h2>
+    <div class="call-board" id="imt-call-board"></div>
+    <div class="call-empty" id="imt-call-empty" style="display:none;">
+      <div class="big">✓ All clear</div>
+      <div class="muted" style="margin-top:4px;" id="imt-call-empty-sub">No calls active on the system.</div>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Active faults <span class="muted" style="font-weight:400;font-size:13px;">— device errors &amp; peripheral disconnects · click a row for device type, IP &amp; MAC</span></h2>
+    <table class="list" id="imt-fault-table">
+      <thead><tr><th>Status</th><th>Device</th><th>Duty area</th><th>Location</th><th>Detail</th><th class="num">Since</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="muted" id="imt-fault-empty" style="display:none;">No active faults.</p>
+  </div>
+  <div class="card">
+    <h2>Recent calls <span class="muted" style="font-weight:400;font-size:13px;">— last 100</span></h2>
+    <table class="list" id="imt-recent-table">
+      <thead><tr><th>Type</th><th>Room</th><th>Duty area</th><th>Priority</th><th class="num">Duration</th><th class="num">When</th><th>State</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="muted" id="imt-recent-empty" style="display:none;">No calls recorded yet.</p>
+  </div>
+</div>
+
+<!-- ---------- device health ---------- -->
+<div class="card imt-view" data-view="devices" style="display:none;">
+  <h2>Device &amp; location health</h2>
+  <table class="list" id="imt-dev-table">
+    <thead><tr><th>Status</th><th>Device</th><th>Location</th><th>Kind</th><th>Detail</th>
+      <th class="num">Fails</th><th class="num">Last change</th><th class="num">Last seen</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p class="muted" id="imt-dev-empty" style="display:none;">No devices yet.
+    {% if site %}They appear once this site's agent connects to its IMT bridge.
+    {% else %}Set the bridge database &amp; log paths below, then enable the monitor.{% endif %}</p>
+</div>
+
+<!-- ---------- log feed (local only) ---------- -->
+{% if not site %}
+<div class="card imt-view" data-view="messages" style="display:none;">
+  <h2>Log feed <span class="muted" style="font-weight:400;font-size:13px;">— newest first, last 100 events parsed from the log</span></h2>
+  <div id="imt-msg-box" style="max-height:520px;overflow:auto;"></div>
+  <p class="muted" id="imt-msg-empty" style="display:none;">No events parsed yet.</p>
+</div>
+{% endif %}
+
+<!-- ---------- fault events ---------- -->
+<div class="card imt-view" data-view="events" style="display:none;">
+  <h2>Device fault history</h2>
+  <table class="list" id="imt-ev-table">
+    <thead><tr><th>Time</th><th>Device</th><th>Change</th><th>Detail</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p class="muted" id="imt-ev-empty" style="display:none;">No device faults recorded yet.</p>
+</div>
+
+{% if is_admin and site %}
+<div class="card">
+  <p class="card-sub" style="margin:0;">This site's IMT bridge is configured on its
+    <b>agent</b> (the monitor running on the Telligence server), which reads the
+    local bridge files and pushes calls &amp; faults up here.</p>
+</div>
+{% elif is_admin and not site %}
+<div class="card">
+  <p class="card-sub" style="margin:0;">Bridge source (database &amp; log paths,
+    poll interval, alerts) is on the <a href="/telligence/settings">Settings</a> tab.</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
+  const SITE = {{ site_id if site_id is not none else 'null' }};
+  const Q = (SITE !== null) ? ("?site=" + SITE) : "";
+  let view = "calls";
+  const FIELDS = ["imt_db_path", "imt_log_path", "imt_poll_secs"];
+  const BOOLS = ["imt_enabled", "imt_alert", "imt_emergency_alert"];
+
+  function esc(s){ const d=document.createElement("div"); d.textContent=s==null?"":String(s); return d.innerHTML; }
+  function ago(ts){ return ts ? fmtAgo(ts) : "—"; }
+  function fmtDur(sec){
+    sec = Math.max(0, Math.floor(sec));
+    const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=sec%60;
+    if (h) return h+"h "+m+"m";
+    if (m) return m+"m "+String(s).padStart(2,"0")+"s";
+    return s+"s";
+  }
+  function catClass(c){ return "cat-" + (["emergency","wc","call","presence","staff"].indexOf(c)>=0 ? c : "other"); }
+  function prioBadge(cat, prio){
+    const map={emergency:"#DA291C",wc:"#e8590c",call:"#f08c00",presence:"#2f9e44",staff:"#1c7ed6",other:"#868e96"};
+    const col=map[cat]||map.other;
+    return '<span class="cbadge" style="background:'+col+'">'+esc(prio||cat)+'</span>';
+  }
+
+  async function loadStatus() {
+    const d = await api("/api/imt/status" + Q);
+    const s = d.status, c = d.counts, cc = c.calls || {active:0,emergency:0};
+    const pill = document.getElementById("imt-pill");
+    let cls="disabled", txt="○ Disabled";
+    if (s.remote) {
+      if (s.connected) { cls="up"; txt="● Agent online"; } else { cls="down"; txt="○ Agent offline"; }
+    } else if (s.enabled && s.connected) { cls="up"; txt="● Reading bridge"; }
+    else if (s.enabled && s.configured) { cls="down"; txt="○ Source error"; }
+    else if (s.enabled) { cls="warn"; txt="… Not configured"; }
+    pill.className = "pill " + cls; pill.textContent = txt;
+
+    let meta = "";
+    if (s.remote) {
+      meta = (s.agent_host ? "agent " + s.agent_host : "site agent") +
+             (s.last_poll_ts ? " · seen " + fmtAgo(s.last_poll_ts) : "");
+    } else {
+      const src = [];
+      if (s.db_path) src.push("db " + s.db_path.split(/[\\/]/).pop());
+      if (s.log_path) src.push("log " + s.log_path.split(/[\\/]/).pop());
+      meta = (src.join(" · ") || "no source set") +
+             (s.last_event_ts ? " · last event " + fmtAgo(s.last_event_ts) : "");
+    }
+    if (s.version) meta = "reader v" + s.version + " · " + meta;
+    if (s.service_health) {
+      const sh = s.service_health;
+      meta += " · bridge service: " + (sh.status === "ok" ? "OK" : "DOWN")
+            + (sh.reason ? " (" + sh.reason + ")" : "");
+    }
+    document.getElementById("imt-meta").textContent = meta;
+    document.getElementById("imt-calls").textContent = cc.active;
+    document.getElementById("imt-emg").textContent = cc.emergency;
+    document.getElementById("imt-failed").textContent = c.failed;
+    document.getElementById("imt-total").textContent = c.total;
+    const err = document.getElementById("imt-err");
+    if (s.last_error) { err.textContent = s.last_error; err.style.display="block"; } else err.style.display="none";
+  }
+
+  let lastCalls = null, dutyFilter = null;   // dutyFilter: null = All, else a duty string
+
+  function inDuty(x){ return dutyFilter===null || (x.duty && x.duty.string===dutyFilter); }
+  function dutyName(x){ return x.duty ? x.duty.name : ""; }
+
+  function renderDutyTabs() {
+    const wrap = document.getElementById("imt-duty-tabs");
+    const das = (lastCalls && lastCalls.duty_areas) || [];
+    if (das.length < 1) { wrap.style.display = "none"; wrap.innerHTML=""; dutyFilter=null; return; }
+    // drop a stale filter if that duty area vanished
+    if (dutyFilter!==null && !das.some(d=>d.string===dutyFilter)) dutyFilter=null;
+    wrap.style.display = "";
+    function nCalls(str){ return lastCalls.active.filter(c=> str===null ? true : (c.duty&&c.duty.string===str)).length; }
+    function nFaults(str){ return lastCalls.faults.filter(c=> str===null ? true : (c.duty&&c.duty.string===str)).length; }
+    function badge(n, cls){ return n ? ' <span class="cbadge" style="background:'+cls+';padding:1px 7px;">'+n+'</span>' : ''; }
+    let html = '<button class="range-btn '+(dutyFilter===null?'active':'')+'" data-duty="__all">All'+
+               badge(nCalls(null),'#f08c00')+badge(nFaults(null),'#DA291C')+'</button>';
+    for (const d of das) {
+      html += '<button class="range-btn '+(dutyFilter===d.string?'active':'')+'" data-duty="'+esc(d.string)+'">'+
+              esc(d.name)+badge(nCalls(d.string),'#f08c00')+badge(nFaults(d.string),'#DA291C')+'</button>';
+    }
+    wrap.innerHTML = html;
+  }
+
+  function renderCallsAndFaults() {
+    if (!lastCalls) return;
+    const das = lastCalls.duty_areas || [];
+    document.getElementById("imt-duty-label").textContent =
+      (dutyFilter!==null && das.length>1) ? ("· " + ((das.find(d=>d.string===dutyFilter)||{}).name||"")) : "";
+    // active calls board
+    const calls = lastCalls.active.filter(inDuty);
+    const board = document.getElementById("imt-call-board");
+    document.getElementById("imt-call-empty").style.display = calls.length ? "none":"block";
+    document.getElementById("imt-call-empty-sub").textContent =
+      dutyFilter!==null ? "No calls active in this duty area." : "No calls active on the system.";
+    board.innerHTML = "";
+    for (const x of calls) {
+      const cat = x.category || "other";
+      const card = document.createElement("div");
+      card.className = "call-card " + catClass(cat);
+      const dn = dutyName(x);
+      const sub = [x.location_string, (dutyFilter===null?dn:"")].filter(Boolean).join(" · ");
+      const loc = sub ? '<div class="call-loc">'+esc(sub)+'</div>' : "";
+      card.innerHTML =
+        '<span class="call-bar '+catClass(cat)+'"></span>'+
+        '<div class="call-main"><div class="call-room">'+esc(x.name||x.location_text||"Unknown")+'</div>'+
+          '<div class="call-type">'+esc(x.event_text||"Call")+'</div>'+loc+'</div>'+
+        '<div class="call-side">'+prioBadge(cat, x.priority)+
+          '<div class="call-dur" data-raised="'+(x.raised_ts||0)+'">'+fmtDur((Date.now()/1000)-(x.raised_ts||0))+'</div></div>';
+      board.appendChild(card);
+    }
+    // active faults (device errors / disconnects) in this duty area
+    const faults = lastCalls.faults.filter(inDuty);
+    const ftb = document.querySelector("#imt-fault-table tbody"); ftb.innerHTML="";
+    document.getElementById("imt-fault-empty").style.display = faults.length ? "none":"block";
+    for (const x of faults) {
+      const tr = document.createElement("tr");
+      tr.className = "fault-row"; tr.style.cursor = "pointer";
+      tr.dataset.ident = x.location_string || x.ident || "";
+      tr.innerHTML =
+        '<td><span class="pill down">✖ Failed</span></td>'+
+        '<td style="font-weight:600;"><span class="fault-caret">▸</span> '+esc(x.name||x.ident)+'</td>'+
+        '<td class="muted">'+esc(dutyName(x))+'</td>'+
+        '<td class="mono" style="font-size:12px;">'+esc(x.location_string||"")+'</td>'+
+        '<td class="muted">'+esc(x.detail||"")+'</td>'+
+        '<td class="num muted">'+ago(x.last_change)+'</td>';
+      ftb.appendChild(tr);
+    }
+    reapplyFaultExpansion();   // keep any open drill-down open across refreshes
+    // recent history (not duty-filtered — it's the site-wide log)
+    const tb = document.querySelector("#imt-recent-table tbody"); tb.innerHTML="";
+    document.getElementById("imt-recent-empty").style.display = lastCalls.recent.length ? "none":"block";
+    for (const x of lastCalls.recent) {
+      const cat = x.category || "other";
+      const dur = (x.state==="cleared" && x.cleared_ts) ? fmtDur(x.cleared_ts - (x.raised_ts||x.cleared_ts))
+                 : (x.state==="active" ? "ongoing" : "—");
+      const when = x.state==="active" ? ("raised "+ago(x.raised_ts)) : ago(x.cleared_ts||x.raised_ts);
+      const stateBadge = x.state==="active" ? '<span class="pill down">active</span>' : '<span class="pill up">cleared</span>';
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        '<td>'+prioBadge(cat, x.event_text)+'</td>'+
+        '<td style="font-weight:600;">'+esc(x.name||x.location_text||"")+'</td>'+
+        '<td class="muted">'+esc(x.duty ? x.duty.name : "")+'</td>'+
+        '<td class="muted">'+esc(x.priority||"")+'</td>'+
+        '<td class="num mono">'+dur+'</td>'+
+        '<td class="num muted">'+when+'</td>'+
+        '<td>'+stateBadge+'</td>';
+      tb.appendChild(tr);
+    }
+  }
+
+  async function loadCalls() {
+    lastCalls = await api("/api/imt/calls" + Q);
+    renderDutyTabs();
+    renderCallsAndFaults();
+  }
+
+  document.getElementById("imt-duty-tabs").addEventListener("click", ev=>{
+    const b = ev.target.closest(".range-btn"); if(!b) return;
+    const v = b.getAttribute("data-duty");
+    dutyFilter = (v==="__all") ? null : v;
+    renderDutyTabs(); renderCallsAndFaults();
+  });
+
+  // ---- fault drill-down: shows the room's actual devices (model + serial) ----
+  const expandedFaults = new Set();   // idents currently expanded (persist across refresh)
+  const faultCache = {};              // ident -> rendered detail HTML (config is static)
+
+  function buildDetailTd(d) {
+    if (d.remote) return '<td colspan="6" class="muted" style="padding:8px 12px;">Device details are read on the site\'s own monitor, not the controller.</td>';
+    const per=d.peripherals||[], rep=d.reported_to||[], gw=d.gateway;
+    const groups=(d.peripheral_groups&&d.peripheral_groups.length)
+      ? d.peripheral_groups
+      : (per.length ? [{title:"", devices:per}] : []);
+    const AREA_TAG={bed:"🛏 Bed area", bathroom:"🚿 Ensuite / bathroom", room:"Room"};
+    let h='<td colspan="6" style="background:var(--surface);"><div style="padding:10px 14px;">';
+    if (groups.length) {
+      h+='<div style="font-weight:700;margin-bottom:6px;">Devices on '+esc(d.room||"this room")+'’s bus</div>';
+      function devRows(list){
+        let t='<table class="list" style="margin:0 0 10px;"><thead><tr><th>Model</th><th>Description</th><th>Serial</th><th class="num">HW</th><th class="num">SW</th></tr></thead><tbody>';
+        for (const p of list) t+='<tr><td style="font-weight:600;">'+esc(p.model)+'</td><td class="muted">'+esc(p.description)+'</td>'+
+          '<td class="mono">'+esc(p.serial)+'</td><td class="num mono">'+esc(p.hw)+'</td><td class="num mono">'+esc(p.sw)+'</td></tr>';
+        return t+'</tbody></table>';
+      }
+      for (const g of groups) {
+        if (g.title) {
+          const tag=AREA_TAG[g.area]||"";
+          h+='<div style="font-size:12px;font-weight:700;color:var(--muted);margin:2px 0 4px;">'+
+             esc(g.title)+(tag&&tag!==g.title?' <span style="font-weight:500;">· '+esc(tag)+'</span>':'')+'</div>';
+        }
+        h+=devRows(g.devices);
+      }
+    } else {
+      h+='<div class="muted" style="margin-bottom:8px;">No per-device list found for this room in the config database.</div>';
+    }
+    const ctx=[];
+    if (gw) ctx.push('<b>Room gateway:</b> '+esc(gw.name)+(gw.type?' ('+esc(gw.type)+')':'')+(gw.ip?' · '+esc(gw.ip):'')+(gw.mac?' · '+esc(gw.mac):''));
+    for (const rp of rep) ctx.push('<b>Reported to:</b> '+esc(rp.name)+(rp.type?' ('+esc(rp.type)+')':'')+(rp.ip?' · '+esc(rp.ip):'')+' · '+rp.addresses.length+' fault address(es)');
+    if (ctx.length) h+='<div style="font-size:12px;color:var(--muted);line-height:1.6;">'+ctx.join('<br>')+'</div>';
+    return h+'</div></td>';
+  }
+  async function detailHtml(ident) {
+    if (faultCache[ident]) return faultCache[ident];
+    try {
+      const d = await api("/api/imt/fault-devices"+(Q?Q+"&":"?")+"ident="+encodeURIComponent(ident));
+      const html = buildDetailTd(d); faultCache[ident]=html; return html;
+    } catch(e){ return '<td colspan="6" class="v-crit" style="padding:8px 12px;">'+esc(e.message)+'</td>'; }
+  }
+  async function expandFault(tr) {
+    const ident = tr.dataset.ident;
+    const caret=tr.querySelector(".fault-caret"); if(caret) caret.textContent="▾";
+    let row=tr.nextElementSibling;
+    if (!row || !row.classList.contains("fault-detail")) {
+      row=document.createElement("tr"); row.className="fault-detail";
+      row.innerHTML='<td colspan="6" class="muted" style="padding:8px 12px;">Loading device details…</td>';
+      tr.after(row);
+    }
+    row.innerHTML = await detailHtml(ident);
+  }
+  function collapseFault(tr) {
+    const caret=tr.querySelector(".fault-caret"); if(caret) caret.textContent="▸";
+    const row=tr.nextElementSibling;
+    if (row && row.classList.contains("fault-detail")) row.remove();
+  }
+  // re-open expanded faults after a refresh rebuilds the table (no re-fetch — cached)
+  function reapplyFaultExpansion() {
+    document.querySelectorAll("#imt-fault-table tr.fault-row").forEach(tr=>{
+      if (expandedFaults.has(tr.dataset.ident)) expandFault(tr);
+    });
+  }
+  document.querySelector("#imt-fault-table").addEventListener("click", ev=>{
+    const tr = ev.target.closest("tr.fault-row"); if(!tr) return;
+    const ident = tr.dataset.ident;
+    if (expandedFaults.has(ident)) { expandedFaults.delete(ident); collapseFault(tr); }
+    else { expandedFaults.add(ident); expandFault(tr); }
+  });
+
+  // tick the live durations every second without refetching
+  setInterval(function(){
+    document.querySelectorAll(".call-dur").forEach(function(el){
+      const r = parseFloat(el.getAttribute("data-raised"))||0;
+      if (r) el.textContent = fmtDur((Date.now()/1000) - r);
+    });
+  }, 1000);
+
+  async function loadDevices() {
+    const d = await api("/api/imt/devices" + Q);
+    const tb = document.querySelector("#imt-dev-table tbody"); tb.innerHTML="";
+    document.getElementById("imt-dev-empty").style.display = d.devices.length ? "none":"block";
+    for (const x of d.devices) {
+      const tr = document.createElement("tr");
+      const st = x.status==="failed" ? ["down","✖ Failed"] : x.status==="ok" ? ["up","● OK"] : ["unknown","… Unknown"];
+      const loc = x.location_string || (x.location_id ? ("id " + x.location_id) : "");
+      tr.innerHTML =
+        '<td><span class="pill '+st[0]+'">'+st[1]+'</span></td>'+
+        '<td style="font-weight:600;">'+esc(x.name||x.ident)+'</td>'+
+        '<td class="mono" style="font-size:12px;">'+esc(loc)+'</td>'+
+        '<td class="muted">'+esc(x.kind||"")+'</td>'+
+        '<td class="muted">'+esc(x.detail||"")+'</td>'+
+        '<td class="num mono">'+x.fail_count+'</td>'+
+        '<td class="num muted">'+ago(x.last_change)+'</td>'+
+        '<td class="num muted">'+ago(x.last_seen)+'</td>';
+      tb.appendChild(tr);
+    }
+  }
+
+  async function loadMessages() {
+    const d = await api("/api/imt/messages" + Q);
+    const box = document.getElementById("imt-msg-box"); if (!box) return;
+    document.getElementById("imt-msg-empty").style.display = d.messages.length ? "none":"block";
+    box.innerHTML = "";
+    for (const m of d.messages) {
+      const row = document.createElement("div");
+      row.style.cssText = "border-bottom:1px solid var(--border);padding:7px 0;";
+      const badge = m.state==="set"
+        ? '<span class="pill down" style="font-size:11px;">SET</span>'
+        : '<span class="pill up" style="font-size:11px;">CLEAR</span>';
+      row.innerHTML =
+        '<div style="font-size:11px;color:var(--muted);">'+new Date(m.ts*1000).toLocaleString()+'</div>'+
+        '<div style="margin:2px 0;">'+badge+' <b>'+esc(m.name)+'</b> <span class="muted">'+esc(m.detail||"")+'</span></div>'+
+        '<pre class="mono" style="margin:2px 0 0;font-size:11px;white-space:pre-wrap;word-break:break-word;color:var(--muted);">'+esc(m.body)+'</pre>';
+      box.appendChild(row);
+    }
+  }
+
+  async function loadEvents() {
+    const d = await api("/api/imt/events" + Q);
+    const tb = document.querySelector("#imt-ev-table tbody"); tb.innerHTML="";
+    document.getElementById("imt-ev-empty").style.display = d.events.length ? "none":"block";
+    for (const e of d.events) {
+      const tr = document.createElement("tr");
+      const st = e.status==="failed" ? ["down","✖ Failed"] : ["up","✔ Recovered"];
+      tr.innerHTML =
+        '<td class="mono" style="font-size:12px;">'+new Date(e.ts*1000).toLocaleString()+'</td>'+
+        '<td style="font-weight:600;">'+esc(e.name)+'</td>'+
+        '<td><span class="pill '+st[0]+'">'+st[1]+'</span></td>'+
+        '<td class="muted">'+esc(e.detail||"")+'</td>';
+      tb.appendChild(tr);
+    }
+  }
+
+  async function refresh() {
+    try {
+      await loadStatus();
+      if (view==="calls") await loadCalls();
+      else if (view==="devices") await loadDevices();
+      else if (view==="messages") await loadMessages();
+      else await loadEvents();
+    } catch(e){ if(e.message!=="auth") {} }
+  }
+
+  document.getElementById("imt-view").addEventListener("click", ev=>{
+    const b=ev.target.closest(".range-btn"); if(!b) return;
+    document.querySelectorAll("#imt-view .range-btn").forEach(x=>x.classList.remove("active"));
+    b.classList.add("active"); view=b.dataset.v;
+    document.querySelectorAll(".imt-view").forEach(el=>el.style.display = el.dataset.view===view ? "":"none");
+    refresh();
+  });
+
+  refresh();
+  setInterval(refresh, 4000);
+})();
+</script>
+{% endblock %}

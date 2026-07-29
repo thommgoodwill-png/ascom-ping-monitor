@@ -1,0 +1,329 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="page-title">Telligence monitoring settings</h1>
+<p class="card-sub" style="margin-top:-6px;">Point the monitor at this server's
+  Telligence IMT bridge — its database and log. Defaults to the standard Ascom
+  install location. On a customer site these are set on that site's agent instead.</p>
+
+<div class="card">
+  <h2>Bridge source</h2>
+  <div class="f-row">
+    <label style="display:inline-flex;align-items:center;gap:8px;">
+      <span class="switch"><input type="checkbox" id="imt_enabled"><span class="track"></span></span>
+      <span class="f-label" style="margin:0;">Enable Telligence monitor</span>
+    </label>
+  </div>
+  <div class="f-row">
+    <div style="flex:3;"><label class="f-label">Bridge database (ImtBridgeDb.db3)</label>
+      <input type="text" id="imt_db_path" placeholder="C:\Program Files (x86)\Ascom\IMT Bridge\Db\ImtBridgeDb.db3"></div>
+  </div>
+  <div class="f-row">
+    <div style="flex:3;"><label class="f-label">Bridge log (ImtBridge.log4net)</label>
+      <input type="text" id="imt_log_path" placeholder="C:\Program Files (x86)\Ascom\IMT Bridge\ImtBridge.log4net"></div>
+  </div>
+  <div class="f-row">
+    <div style="flex:3;"><label class="f-label">Config database (ConfigDb3.db3) <span class="muted">— device type / IP / MAC for fault drill-down</span></label>
+      <input type="text" id="imt_config_db_path" placeholder="C:\Program Files (x86)\Ascom\IMT Bridge\Db\ConfigDb3.db3"></div>
+  </div>
+  <div class="f-row">
+    <div><label class="f-label">Poll interval (seconds)</label><input type="number" id="imt_poll_secs" placeholder="15"></div>
+    <div style="display:flex;align-items:flex-end;">
+      <label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;">
+        <input type="checkbox" id="imt_alert"> Webhook on device fault / recovery</label>
+    </div>
+    <div style="display:flex;align-items:flex-end;">
+      <label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;">
+        <input type="checkbox" id="imt_emergency_alert"> Webhook on Emergency / WC call</label>
+    </div>
+  </div>
+  <div class="f-help">Calls are display-only on the board by default; tick the last
+    box only if you also want Emergency / bathroom calls to raise a webhook alert.
+    The database gives the room/device inventory and names; the log carries the live
+    call and fault transitions.</div>
+
+  <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:12px;">
+    <div class="f-row" style="align-items:flex-end;">
+      <div style="flex:0 0 auto;"><label class="f-label">Bridge service</label>
+        <label style="display:inline-flex;align-items:center;gap:8px;height:34px;">
+          <span class="switch"><input type="checkbox" id="imt_service_check"><span class="track"></span></span>
+          <span style="font-size:13px;">Monitor service up/down</span>
+        </label></div>
+      <div><label class="f-label">Consider down after <span class="muted">(seconds idle)</span></label>
+        <input type="number" id="imt_service_stale_secs" placeholder="180"></div>
+      <div style="flex:2;"><label class="f-label">Windows service name <span class="muted">(optional — authoritative)</span></label>
+        <input type="text" id="imt_service_name" placeholder="e.g. ImtBridge"></div>
+    </div>
+    <div class="f-help">Flags the bridge as <b>down</b> if it stops writing its log/DB
+      for that long — catches a crashed or hung bridge even while the server still
+      pings. Naming the Windows service switches to an exact <code>sc query</code> check.</div>
+  </div>
+
+  <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
+    <button class="btn primary" id="imt-save">Save</button>
+    <button class="btn" id="imt-test">Test source</button>
+    <button class="btn danger" id="imt-clear" style="margin-left:auto;">Clear data</button>
+  </div>
+  <div id="imt-test-out" class="muted" style="margin-top:8px;font-size:13px;"></div>
+</div>
+
+<div class="card">
+  <h2>Telligence database <span class="muted" style="font-weight:400;font-size:13px;">— device type &amp; serial</span></h2>
+  <p class="card-sub">The bridge only knows a faulty device's address. Its type and
+    serial live in the Telligence SQL Server database (<code>DukaneESMMessages</code>).
+    Connect to it here so the fault drill-down can show the real device details.</p>
+
+  <div class="f-row">
+    <label style="display:inline-flex;align-items:center;gap:8px;">
+      <span class="switch"><input type="checkbox" id="tel_db_enabled"><span class="track"></span></span>
+      <span class="f-label" style="margin:0;">Enable Telligence database lookup</span>
+    </label>
+  </div>
+  <div class="f-row">
+    <div><label class="f-label">SQL Server host / IP</label><input type="text" id="tel_db_host" placeholder="localhost"></div>
+    <div><label class="f-label">Named instance <span class="muted">(optional)</span></label><input type="text" id="tel_db_instance" placeholder="e.g. TELLIGENCE"></div>
+    <div><label class="f-label">Port</label><input type="number" id="tel_db_port" placeholder="1433"></div>
+    <div><label class="f-label">Database</label><input type="text" id="tel_db_name" placeholder="DukaneESMMessages"></div>
+  </div>
+  <div class="f-row">
+    <div><label class="f-label">Authentication</label>
+      <select id="tel_db_auth">
+        <option value="windows">Windows (trusted)</option>
+        <option value="sql">SQL login</option>
+      </select></div>
+    <div><label class="f-label">Username <span class="muted">(SQL auth)</span></label><input type="text" id="tel_db_user" placeholder="sa"></div>
+    <div><label class="f-label">Password <span class="muted">(SQL auth)</span></label><input type="password" id="tel_db_password" placeholder="••••••"></div>
+  </div>
+  <div class="f-help" id="tel-drivers"></div>
+
+  <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
+    <button class="btn primary" id="tel-save">Save</button>
+    <button class="btn" id="tel-test">Test connection</button>
+  </div>
+  <div id="tel-test-out" class="muted" style="margin-top:8px;font-size:13px;"></div>
+
+  <!-- read-only schema browser (setup / discovery) -->
+  <details style="margin-top:16px;">
+    <summary style="cursor:pointer;font-weight:600;">Browse tables (read-only)</summary>
+    <div class="f-row" style="margin-top:10px;">
+      <div><label class="f-label">Find column (e.g. serial, type)</label>
+        <div style="display:flex;gap:6px;"><input type="text" id="tel-search-term" placeholder="serial">
+          <button class="btn small" id="tel-search-btn">Search</button></div></div>
+      <div style="flex:2;"><label class="f-label">Table</label>
+        <div style="display:flex;gap:6px;"><select id="tel-table" style="flex:1;"></select>
+          <button class="btn small" id="tel-load">Load</button></div></div>
+    </div>
+    <div id="tel-browse" style="margin-top:10px;max-height:420px;overflow:auto;font-size:12px;"></div>
+  </details>
+</div>
+
+<div class="card">
+  <h2>Call feed <span class="muted" style="font-weight:400;font-size:13px;">— ASCII stream over IP</span></h2>
+  <p class="card-sub">Streams one line per live call to a third-party receiver
+    (display board, paging gateway, logger). Each line is
+    <code>dutyarea|position|location|callstate</code> using the human-friendly
+    names, ending in a carriage return. Purely outbound — a <code>Reset</code>
+    line only reflects that the nurse-call system cleared the call.</p>
+
+  <div class="f-row">
+    <label style="display:inline-flex;align-items:center;gap:8px;">
+      <span class="switch"><input type="checkbox" id="feed_enabled"><span class="track"></span></span>
+      <span class="f-label" style="margin:0;">Enable call feed</span>
+    </label>
+  </div>
+  <div class="f-row">
+    <div><label class="f-label">Connection</label>
+      <select id="feed_mode">
+        <option value="tcp_client">TCP — connect out to host:port</option>
+        <option value="tcp_server">TCP — listen for connections</option>
+        <option value="udp">UDP — send datagrams</option>
+      </select></div>
+    <div><label class="f-label">Host / IP <span class="muted" id="feed-host-note">(receiver)</span></label>
+      <input type="text" id="feed_host" placeholder="192.168.1.50"></div>
+    <div><label class="f-label">Port</label><input type="number" id="feed_port" placeholder="5000"></div>
+  </div>
+  <div class="f-row">
+    <div><label class="f-label">Line ending</label>
+      <select id="feed_eol">
+        <option value="cr">Carriage return (\r)</option>
+        <option value="crlf">CR + LF (\r\n)</option>
+        <option value="lf">Line feed (\n)</option>
+      </select></div>
+    <div><label class="f-label">Reset word <span class="muted">(callstate on clear)</span></label>
+      <input type="text" id="feed_clear_text" placeholder="Reset"></div>
+    <div style="flex:2;display:flex;align-items:flex-end;">
+      <div class="f-help" style="margin:0;">Example line:
+        <code>Test Rig|Bed|Bedroom 1|Patient Call</code></div>
+    </div>
+  </div>
+  <div class="f-row" style="align-items:flex-end;">
+    <div style="flex:0 0 auto;"><label class="f-label">Heartbeat</label>
+      <label style="display:inline-flex;align-items:center;gap:8px;height:34px;">
+        <span class="switch"><input type="checkbox" id="feed_heartbeat_enabled"><span class="track"></span></span>
+        <span style="font-size:13px;">Send keepalive</span>
+      </label></div>
+    <div><label class="f-label">Interval <span class="muted">(seconds)</span></label>
+      <input type="number" id="feed_heartbeat_secs" placeholder="30"></div>
+    <div><label class="f-label">Heartbeat line</label>
+      <input type="text" id="feed_heartbeat_text" placeholder="HEARTBEAT"></div>
+    <div style="flex:1;display:flex;align-items:flex-end;">
+      <div class="f-help" style="margin:0;">Sent on that interval with the same line
+        ending. For the TCP client it also surfaces a dropped link so it reconnects.</div>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
+    <button class="btn primary" id="feed-save">Save</button>
+    <button class="btn" id="feed-test">Send test line</button>
+    <span id="feed-status" class="muted" style="margin-left:auto;align-self:center;font-size:13px;"></span>
+  </div>
+  <div id="feed-test-out" class="muted" style="margin-top:8px;font-size:13px;"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  const FIELDS = ["imt_db_path", "imt_log_path", "imt_config_db_path", "imt_poll_secs",
+                  "imt_service_stale_secs", "imt_service_name"];
+  const BOOLS = ["imt_enabled", "imt_alert", "imt_emergency_alert", "imt_service_check"];
+  function esc(s){ const d=document.createElement("div"); d.textContent=s==null?"":String(s); return d.innerHTML; }
+
+  async function loadConfig() {
+    const d = await api("/api/imt/config"); const c = d.config;
+    for (const f of FIELDS) { const el=document.getElementById(f); if(el) el.value = c[f]==null?"":c[f]; }
+    for (const b of BOOLS) { const el=document.getElementById(b); if(el) el.checked = !!c[b]; }
+  }
+  function gather() {
+    const body={};
+    for (const f of FIELDS) { const el=document.getElementById(f); if(el) body[f]=el.value; }
+    for (const b of BOOLS) { const el=document.getElementById(b); if(el) body[b]=el.checked; }
+    return body;
+  }
+  document.getElementById("imt-save").addEventListener("click", async ()=>{
+    try { await api("/api/imt/config",{method:"POST",body:JSON.stringify(gather())}); toast("Saved"); loadConfig(); }
+    catch(e){ toast(e.message,true); }
+  });
+  document.getElementById("imt-test").addEventListener("click", async ()=>{
+    const out=document.getElementById("imt-test-out"); out.textContent="Checking…";
+    try { await api("/api/imt/config",{method:"POST",body:JSON.stringify(gather())});
+      const r=await api("/api/imt/test",{method:"POST",body:"{}"});
+      out.innerHTML='<span class="v-good">✓ Source readable.</span> '+esc(JSON.stringify(r.result)); }
+    catch(e){ out.innerHTML='<span class="v-crit">✗ '+esc(e.message)+'</span>'; }
+  });
+  document.getElementById("imt-clear").addEventListener("click", async ()=>{
+    if(!confirm("Clear the Telligence device + call data? It repopulates on the next poll.")) return;
+    try{ await api("/api/imt/clear",{method:"POST",body:"{}"}); toast("Cleared"); }catch(e){ toast(e.message,true);}
+  });
+  loadConfig();
+
+  // ---------- Telligence SQL database ----------
+  const TF = ["tel_db_host","tel_db_instance","tel_db_port","tel_db_name","tel_db_user","tel_db_password"];
+  const TB = ["tel_db_enabled"];
+  async function loadTel(){
+    const d=await api("/api/teldb/config"); const c=d.config;
+    for(const f of TF){const el=document.getElementById(f); if(el) el.value=c[f]==null?"":c[f];}
+    for(const b of TB){const el=document.getElementById(b); if(el) el.checked=!!c[b];}
+    document.getElementById("tel_db_auth").value=c.tel_db_auth||"windows";
+    const dv=c._drivers||{};
+    document.getElementById("tel-drivers").textContent=
+      "Drivers: pyodbc "+(dv.pyodbc?"✓":"✗")+" · python-tds "+(dv.pytds?"✓":"✗")+
+      (dv.pyodbc?"":"  (Windows auth needs pyodbc; install it on the server)");
+  }
+  function gatherTel(){
+    const body={};
+    for(const f of TF){const el=document.getElementById(f); if(el) body[f]=el.value;}
+    for(const b of TB) body[b]=document.getElementById(b).checked;
+    body.tel_db_auth=document.getElementById("tel_db_auth").value;
+    return body;
+  }
+  document.getElementById("tel-save").addEventListener("click", async ()=>{
+    try{ await api("/api/teldb/config",{method:"POST",body:JSON.stringify(gatherTel())}); toast("Saved"); loadTel(); }
+    catch(e){ toast(e.message,true); }
+  });
+  document.getElementById("tel-test").addEventListener("click", async ()=>{
+    const out=document.getElementById("tel-test-out"); out.textContent="Connecting…";
+    try{ await api("/api/teldb/config",{method:"POST",body:JSON.stringify(gatherTel())});
+      const r=await api("/api/teldb/test",{method:"POST",body:"{}"});
+      out.innerHTML='<span class="v-good">✓ Connected via '+esc(r.result.driver)+'.</span> '+esc(r.result.tables)+' tables · '+esc(r.result.server_version||"");
+      loadTables(); }
+    catch(e){ out.innerHTML='<span class="v-crit">✗ '+esc(e.message)+'</span>'; }
+  });
+  async function loadTables(){
+    try{ const d=await api("/api/teldb/tables"); const sel=document.getElementById("tel-table");
+      sel.innerHTML=d.tables.map(t=>'<option>'+esc(t.name)+'</option>').join(""); }catch(e){}
+  }
+  function renderRows(rows){
+    const box=document.getElementById("tel-browse");
+    if(!rows||!rows.length){ box.innerHTML='<span class="muted">no rows</span>'; return; }
+    const cols=Object.keys(rows[0]);
+    let h='<table class="list"><thead><tr>'+cols.map(c=>'<th>'+esc(c)+'</th>').join("")+'</tr></thead><tbody>';
+    for(const r of rows) h+='<tr>'+cols.map(c=>'<td>'+esc(r[c])+'</td>').join("")+'</tr>';
+    box.innerHTML=h+'</tbody></table>';
+  }
+  document.getElementById("tel-load").addEventListener("click", async ()=>{
+    const t=document.getElementById("tel-table").value;
+    const box=document.getElementById("tel-browse"); box.textContent="Loading "+t+"…";
+    try{ const d=await api("/api/teldb/sample?limit=20&table="+encodeURIComponent(t)); renderRows(d.rows); }
+    catch(e){ box.innerHTML='<span class="v-crit">'+esc(e.message)+'</span>'; }
+  });
+  document.getElementById("tel-search-btn").addEventListener("click", async ()=>{
+    const term=document.getElementById("tel-search-term").value.trim(); if(!term) return;
+    const box=document.getElementById("tel-browse"); box.textContent="Searching…";
+    try{ const d=await api("/api/teldb/search?term="+encodeURIComponent(term)); renderRows(d.hits); }
+    catch(e){ box.innerHTML='<span class="v-crit">'+esc(e.message)+'</span>'; }
+  });
+  loadTel();
+
+  // ---------- ASCII call feed ----------
+  const FF = ["feed_mode","feed_host","feed_port","feed_eol","feed_clear_text",
+              "feed_heartbeat_secs","feed_heartbeat_text"];
+  const FBOOL = ["feed_enabled","feed_heartbeat_enabled"];
+  function feedHostNote(){
+    const m=document.getElementById("feed_mode").value;
+    const host=document.getElementById("feed_host");
+    const note=document.getElementById("feed-host-note");
+    if(m==="tcp_server"){ host.disabled=true; host.placeholder="(listens on all interfaces)"; note.textContent="(not used)"; }
+    else { host.disabled=false; host.placeholder="192.168.1.50"; note.textContent="(receiver)"; }
+  }
+  async function loadFeed(){
+    const d=await api("/api/feed/config"); const c=d.config;
+    for(const f of FF){const el=document.getElementById(f); if(el) el.value=c[f]==null?"":c[f];}
+    for(const b of FBOOL){const el=document.getElementById(b); if(el) el.checked=!!c[b];}
+    feedHostNote(); refreshFeedStatus();
+  }
+  function gatherFeed(){
+    const body={};
+    for(const b of FBOOL){const el=document.getElementById(b); if(el) body[b]=el.checked;}
+    for(const f of FF){const el=document.getElementById(f); if(el) body[f]=el.value;}
+    return body;
+  }
+  async function refreshFeedStatus(){
+    try{ const d=await api("/api/feed/status"); const s=d.status;
+      if(!s.enabled){ document.getElementById("feed-status").textContent="disabled"; return; }
+      let t=s.connected?"● connected":"○ not connected";
+      if(s.mode==="tcp_server") t+=" · "+s.clients+" client(s)";
+      t+=" · sent "+s.sent_count;
+      if(s.active_calls) t+=" · "+s.active_calls+" active";
+      if(s.last_error) t+=" · "+s.last_error;
+      document.getElementById("feed-status").textContent=t;
+    }catch(e){}
+  }
+  document.getElementById("feed_mode").addEventListener("change", feedHostNote);
+  document.getElementById("feed-save").addEventListener("click", async ()=>{
+    try{ await api("/api/feed/config",{method:"POST",body:JSON.stringify(gatherFeed())}); toast("Saved"); loadFeed(); }
+    catch(e){ toast(e.message,true); }
+  });
+  document.getElementById("feed-test").addEventListener("click", async ()=>{
+    const out=document.getElementById("feed-test-out"); out.textContent="Sending…";
+    try{ await api("/api/feed/config",{method:"POST",body:JSON.stringify(gatherFeed())});
+      const r=await api("/api/feed/test",{method:"POST",body:"{}"});
+      out.innerHTML='<span class="v-good">✓ Queued via '+esc(r.result.mode)+':</span> <code>'+esc(r.result.sample)+'</code>';
+      setTimeout(refreshFeedStatus,500); }
+    catch(e){ out.innerHTML='<span class="v-crit">✗ '+esc(e.message)+'</span>'; }
+  });
+  loadFeed();
+  setInterval(refreshFeedStatus, 5000);
+})();
+</script>
+{% endblock %}

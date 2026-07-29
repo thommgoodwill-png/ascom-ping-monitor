@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — Ascom Network Monitor</title>
+<link rel="icon" href="{{ favicon_url }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script>
+  (function () {
+    var t = localStorage.getItem("pingmon-theme") || "{{ theme }}";
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+</head>
+<body>
+<div class="login-wrap">
+  {% if stage == 'totp' %}
+  <form class="login-card" method="post" autocomplete="off">
+    <input type="hidden" name="stage" value="totp">
+    <img src="{{ logo_url }}" alt="ascom">
+    <div class="sub">Two-factor authentication</div>
+    {% if error %}<div class="login-error">{{ error }}</div>{% endif %}
+    <p style="font-size:13px;color:var(--muted);margin:0 0 14px;">
+      Enter the 6-digit code from your authenticator app.</p>
+    <div style="margin-bottom:20px;">
+      <label class="f-label" for="code">Authentication code</label>
+      <input type="text" id="code" name="code" inputmode="numeric" pattern="[0-9]*"
+             maxlength="6" autocomplete="one-time-code" required autofocus
+             style="font-size:20px;letter-spacing:4px;text-align:center;">
+    </div>
+    <button class="btn primary" style="width:100%;justify-content:center;" type="submit">Verify</button>
+    <div style="text-align:center;margin-top:12px;"><a href="/login" class="muted" style="font-size:12px;">← start over</a></div>
+  </form>
+  {% else %}
+  <form class="login-card" method="post" autocomplete="off">
+    <input type="hidden" name="stage" value="password">
+    <img src="{{ logo_url }}" alt="ascom">
+    <div class="sub">Network Monitor — sign in</div>
+    {% if error %}<div class="login-error">{{ error }}</div>{% endif %}
+    <div style="margin-bottom:14px;">
+      <label class="f-label" for="username">Username</label>
+      <input type="text" id="username" name="username" required autofocus>
+    </div>
+    <div style="margin-bottom:20px;">
+      <label class="f-label" for="password">Password</label>
+      <input type="password" id="password" name="password" required>
+    </div>
+    <button class="btn primary" style="width:100%;justify-content:center;" type="submit">Sign in</button>
+  </form>
+  {% endif %}
+</div>
+</body>
+</html>

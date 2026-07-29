@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_site_subnav.html" %}
+<h1 class="page-title" id="site-title">Site settings</h1>
+
+<div class="card">
+  <h2>Agent settings <span class="muted" style="font-weight:400;font-size:13px;">— defaults for this site's devices</span></h2>
+  <p class="card-sub">These apply to every device at this site that doesn't have its
+    own per-device override. Leave a field blank to inherit the controller global.
+    Changes reach the site's agent on its next sync — they only affect ping rate and
+    thresholds, so they can't disconnect the agent.</p>
+  <div class="f-row">
+    <div><label class="f-label">Ping interval (s)</label>
+      <input type="number" id="s_ping_interval" min="0.2" max="60" step="0.1"></div>
+    <div><label class="f-label">Warn threshold (ms)</label>
+      <input type="number" id="s_warn_ms" min="1" step="1"></div>
+    <div><label class="f-label">Crit threshold (ms)</label>
+      <input type="number" id="s_crit_ms" min="1" step="1"></div>
+  </div>
+  <div class="f-help" id="agent-globals"></div>
+  <div style="display:flex;gap:8px;margin-top:14px;">
+    <button class="btn primary" id="agent-save">Save</button>
+    <button class="btn" id="agent-reset" title="Clear all three back to the controller global">Reset to global</button>
+  </div>
+  <div id="agent-out" class="muted" style="margin-top:8px;font-size:13px;"></div>
+</div>
+
+<div class="card">
+  <h2>Stored data</h2>
+  <p class="card-sub">Clear the stored ping history, events and the failed-ping
+    tallies for every device at this site. The devices themselves are kept — only
+    their recorded data is wiped, and it starts filling again on the next ping.</p>
+
+  <div id="clear-summary" class="muted" style="font-size:13px;margin-bottom:12px;"></div>
+
+  <button class="btn danger" id="clear-btn">Clear stored data for this site</button>
+  <div id="clear-out" class="muted" style="margin-top:10px;font-size:13px;"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  const SID = {{ site_id }};
+
+  // ---- per-site agent settings ----
+  const AF = ["ping_interval", "warn_ms", "crit_ms"];
+  const AID = { ping_interval: "s_ping_interval", warn_ms: "s_warn_ms", crit_ms: "s_crit_ms" };
+  async function loadAgent() {
+    let site = {}, g = {};
+    try { site = (await api("/api/sites/" + SID)).site || {}; } catch (e) {}
+    try { g = (await api("/api/settings")).settings || {}; } catch (e) {}
+    for (const f of AF) {
+      const el = document.getElementById(AID[f]);
+      if (el) el.value = site[f] == null ? "" : site[f];
+    }
+    document.getElementById("agent-globals").textContent =
+      "Controller global: ping " + (g.ping_interval != null ? g.ping_interval + "s" : "—")
+      + " · warn " + (g.warn_ms != null ? g.warn_ms + "ms" : "—")
+      + " · crit " + (g.crit_ms != null ? g.crit_ms + "ms" : "—")
+      + ". Blank fields use these.";
+  }
+  function gatherAgent() {
+    const body = {};
+    for (const f of AF) {
+      const el = document.getElementById(AID[f]);
+      body[f] = el && el.value.trim() !== "" ? el.value.trim() : null;
+    }
+    return body;
+  }
+  async function saveAgent(body) {
+    const out = document.getElementById("agent-out"); out.textContent = "Saving…";
+    try {
+      await api("/api/sites/" + SID + "/settings", { method: "POST", body: JSON.stringify(body) });
+      out.innerHTML = '<span class="v-good">✓ Saved. The agent applies it on its next sync.</span>';
+      loadAgent();
+    } catch (e) { out.innerHTML = '<span class="v-crit">✗ ' + e.message + '</span>'; }
+  }
+  document.getElementById("agent-save").addEventListener("click", () => saveAgent(gatherAgent()));
+  document.getElementById("agent-reset").addEventListener("click", () => {
+    if (!confirm("Clear this site's ping interval and thresholds back to the controller global?")) return;
+    saveAgent({ ping_interval: null, warn_ms: null, crit_ms: null });
+  });
+  loadAgent();
+
+  async function loadSummary() {
+    try {
+      const d = await api("/api/sites/" + SID);
+      document.getElementById("site-title").textContent = d.site.name + " · settings";
+      let totalFails = 0;
+      for (const dev of d.devices) totalFails += (dev.fail_total || 0);
+      document.getElementById("clear-summary").textContent =
+        d.devices.length + " device(s) at this site · "
+        + totalFails + " failed ping event(s) tallied.";
+    } catch (e) {}
+  }
+
+  document.getElementById("clear-btn").addEventListener("click", async () => {
+    if (!confirm("Clear ALL stored ping history, events and failed-ping tallies "
+                 + "for this site? The devices are kept; this cannot be undone.")) return;
+    const out = document.getElementById("clear-out");
+    out.textContent = "Clearing…";
+    try {
+      const r = await api("/api/sites/" + SID + "/clear", { method: "POST", body: "{}" });
+      const c = r.cleared || {};
+      out.innerHTML = '<span class="v-good">✓ Cleared '
+        + (c.pings || 0) + ' ping row(s) and ' + (c.events || 0)
+        + ' event(s) across ' + (c.devices || 0) + ' device(s). Tallies reset.</span>';
+      loadSummary();
+    } catch (e) {
+      out.innerHTML = '<span class="v-crit">✗ ' + e.message + '</span>';
+    }
+  });
+
+  loadSummary();
+})();
+</script>
+{% endblock %}

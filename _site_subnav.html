@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Create your account — Ascom Network Monitor</title>
+<link rel="icon" href="{{ favicon_url }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script>
+  (function () {
+    var t = localStorage.getItem("pingmon-theme") || "{{ theme }}";
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-card" style="width:400px;">
+    <img src="{{ logo_url }}" alt="ascom">
+    <div class="sub">Network Monitor — create your account</div>
+
+    {% if not valid %}
+      <div class="login-error">This invite link is invalid or has expired. Ask your
+        administrator to send a new one.</div>
+      <a class="btn" style="width:100%;justify-content:center;" href="/login">Go to sign in</a>
+    {% else %}
+      <p style="font-size:13px;color:var(--muted);margin:0 0 16px;">
+        You've been invited as a <b>{{ 'administrator' if role == 'admin' else 'standard user' }}</b>.
+        Your username will be your email: <b>{{ email }}</b></p>
+      <div id="err" class="login-error" style="display:none;"></div>
+
+      <!-- Step 1: password -->
+      <div id="step1">
+        <div style="margin-bottom:6px;">
+          <label class="f-label" for="password">Choose a password</label>
+          <input type="password" id="password" placeholder="strong password" autofocus>
+        </div>
+        <div class="f-help" style="margin-bottom:14px;">At least 10 characters with an
+          uppercase &amp; lowercase letter, a number and a symbol.</div>
+        <div style="margin-bottom:20px;">
+          <label class="f-label" for="password2">Confirm password</label>
+          <input type="password" id="password2">
+        </div>
+        <button class="btn primary" id="next" style="width:100%;justify-content:center;">Continue to 2FA setup →</button>
+      </div>
+
+      <!-- Step 2: mandatory 2FA -->
+      <div id="step2" style="display:none;">
+        <p style="font-size:13px;color:var(--muted);margin:0 0 12px;">
+          Two-factor authentication is required. Scan this with an authenticator app
+          (Google/Microsoft Authenticator, Authy…), then enter the code.</p>
+        <div style="display:flex;justify-content:center;margin-bottom:12px;">
+          <div id="qr-box" style="width:180px;height:180px;background:#fff;border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;justify-content:center;">
+            <img id="qr-img" alt="QR" style="width:100%;height:100%;display:none;">
+            <span class="muted" id="qr-fallback" style="display:none;padding:8px;font-size:11px;text-align:center;">Use the key below</span>
+          </div>
+        </div>
+        <div class="f-help" style="margin-bottom:4px;">Or enter this key manually:</div>
+        <div class="mono" id="secret" style="font-size:13px;background:var(--surface-2);padding:8px;border-radius:6px;word-break:break-all;letter-spacing:1px;margin-bottom:14px;"></div>
+        <div style="margin-bottom:18px;">
+          <label class="f-label" for="code">6-digit code</label>
+          <input type="text" id="code" inputmode="numeric" maxlength="6" placeholder="123456"
+                 style="font-size:18px;letter-spacing:3px;text-align:center;">
+        </div>
+        <button class="btn primary" id="create" style="width:100%;justify-content:center;">Create account</button>
+      </div>
+
+      <div id="done" style="display:none;text-align:center;margin-top:14px;">
+        <p class="v-good" style="font-weight:600;">✓ Account created with 2FA enabled.</p>
+        <a class="btn primary" style="width:100%;justify-content:center;" href="/login">Sign in</a>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% if valid %}
+<script>
+(function () {
+  const TOKEN = "{{ token }}";
+  let pwd = "";
+  function showErr(m){ const e=document.getElementById("err"); e.textContent=m; e.style.display="block"; }
+  function clearErr(){ document.getElementById("err").style.display="none"; }
+  function pwErr(p){
+    if(p.length<10) return "Password must be at least 10 characters long.";
+    const miss=[];
+    if(!/[a-z]/.test(p)) miss.push("a lowercase letter");
+    if(!/[A-Z]/.test(p)) miss.push("an uppercase letter");
+    if(!/[0-9]/.test(p)) miss.push("a number");
+    if(!/[^A-Za-z0-9]/.test(p)) miss.push("a symbol");
+    return miss.length ? "Password must include "+miss.join(", ")+"." : null;
+  }
+
+  // Step 1 -> Step 2: validate password, then begin 2FA
+  document.getElementById("next").addEventListener("click", async () => {
+    clearErr();
+    const p=document.getElementById("password").value;
+    const p2=document.getElementById("password2").value;
+    const e=pwErr(p); if(e){ showErr(e); return; }
+    if(p!==p2){ showErr("Passwords don't match."); return; }
+    pwd = p;
+    try {
+      const res = await fetch("/api/invite/"+encodeURIComponent(TOKEN)+"/2fa-begin", {
+        method:"POST", headers:{"Content-Type":"application/json"}, body:"{}" });
+      const d = await res.json();
+      if(!res.ok) throw new Error(d.error||res.statusText);
+      document.getElementById("secret").textContent = d.secret;
+      const img=document.getElementById("qr-img"), fb=document.getElementById("qr-fallback");
+      if(d.qr){
+        img.src="/invite/"+encodeURIComponent(TOKEN)+"/qr.svg?t="+Date.now();
+        img.onload=()=>{img.style.display="block";fb.style.display="none";};
+        img.onerror=()=>{img.style.display="none";fb.style.display="block";};
+      } else { img.style.display="none"; fb.style.display="block"; }
+      document.getElementById("step1").style.display="none";
+      document.getElementById("step2").style.display="block";
+      document.getElementById("code").focus();
+    } catch(e){ showErr(e.message); }
+  });
+
+  // Step 2: create account with password + verified 2FA code
+  document.getElementById("create").addEventListener("click", async () => {
+    clearErr();
+    const code=document.getElementById("code").value.trim();
+    if(!/^\d{6}$/.test(code)){ showErr("Enter the 6-digit code from your app."); return; }
+    try {
+      const res = await fetch("/api/invite/"+encodeURIComponent(TOKEN), {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({password:pwd, code:code}) });
+      const d = await res.json();
+      if(!res.ok) throw new Error(d.error||res.statusText);
+      document.getElementById("step2").style.display="none";
+      document.getElementById("done").style.display="block";
+    } catch(e){ showErr(e.message); }
+  });
+})();
+</script>
+{% endif %}
+</body>
+</html>
