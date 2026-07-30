@@ -50,7 +50,7 @@ from . import database, settings
 log = logging.getLogger("pingmon.imt")
 
 SITE_ID = None   # this reader always represents the LOCAL bridge for this instance
-READER_VERSION = "2.16"  # bump on reader changes so the running build is identifiable
+READER_VERSION = "2.24"  # bump on reader changes so the running build is identifiable
 STATE_PATH = os.path.join(database.DATA_DIR, "imt_state.json")
 
 # A log line starts with "2026-02-11 15:08:31,039 ".
@@ -568,22 +568,75 @@ def _query_service(name):
     return "UNKNOWN" if out.returncode == 0 else None
 
 
+# The Ascom/Telligence IMT bridge runs as a Windows service (the log shows
+# ImtBridgeCore.ImtBridgeService). We try these exact names first, then fall back
+# to scanning all services for one whose name/display-name looks like the bridge.
+_KNOWN_SERVICES = ("ImtBridge", "ImtBridgeCore", "ImtBridgeService",
+                   "Ascom IMT Bridge", "AscomImtBridge")
+_SERVICE_HINTS = ("imtbridge", "imt bridge", "telligence", "dukane",
+                  "ascom")
+_svc_cache = {"name": None, "ts": 0.0}
+
+
+def detect_bridge_service(ttl=300):
+    """Best-effort auto-detection of the bridge's Windows service name so the
+    health check works with no configuration. Cached (service names don't move).
+    Returns the service name, or None (not Windows / not found)."""
+    if os.name != "nt":
+        return None
+    now = time.time()
+    if _svc_cache["name"] and now - _svc_cache["ts"] < ttl:
+        return _svc_cache["name"]
+    if now - _svc_cache["ts"] < ttl and _svc_cache["ts"]:
+        return _svc_cache["name"]          # negative result cached too
+    found = None
+    for name in _KNOWN_SERVICES:           # 1) cheap: probe the likely names
+        if _query_service(name) is not None:
+            found = name
+            break
+    if not found:                          # 2) enumerate and match
+        import subprocess
+        try:
+            out = subprocess.run(["sc", "query", "type=", "service", "state=", "all"],
+                                 capture_output=True, text=True, timeout=8)
+            cur = None
+            for line in (out.stdout or "").splitlines():
+                s = line.strip()
+                up = s.upper()
+                if up.startswith("SERVICE_NAME:"):
+                    cur = s.split(":", 1)[1].strip()
+                    if any(h in cur.lower() for h in _SERVICE_HINTS):
+                        found = cur
+                        break
+                elif up.startswith("DISPLAY_NAME:") and cur:
+                    if any(h in s.split(":", 1)[1].lower() for h in _SERVICE_HINTS):
+                        found = cur
+                        break
+        except (OSError, subprocess.SubprocessError):
+            pass
+    _svc_cache["name"] = found
+    _svc_cache["ts"] = now
+    return found
+
+
 def bridge_health(cfg, stale_secs, service_name=""):
     """Is the IMT bridge service actually working right now?
 
-    Prefers an authoritative Windows service query when a service name is set;
-    otherwise falls back to write-freshness — the bridge writes to its log (and
-    DB) continuously while running, so if neither file has changed for longer
-    than ``stale_secs`` the service is stopped or hung. Returns a dict with
-    status ok|failed, a human reason, the source used, and last-activity age."""
+    Checks the actual Windows service by default — the configured name if set,
+    otherwise an auto-detected one. Only when no service can be found (e.g. the
+    monitor runs on a different box from the bridge, or a non-Windows host) does
+    it fall back to write-freshness: the bridge writes to its log/DB continuously
+    while running, so if neither file has changed for longer than ``stale_secs``
+    the service is stopped or hung."""
     now = time.time()
-    if service_name:
-        state = _query_service(service_name)
+    name = (service_name or "").strip() or detect_bridge_service()
+    if name:
+        state = _query_service(name)
         if state is not None:
             ok = state == "RUNNING"
             return {"status": "ok" if ok else "failed", "source": "service",
-                    "service_state": state,
-                    "reason": f"service '{service_name}' is {state}",
+                    "service": name, "service_state": state,
+                    "reason": f"service '{name}' is {state}",
                     "last_activity": now if ok else None,
                     "age": 0 if ok else None}
     times = []
@@ -605,7 +658,7 @@ def bridge_health(cfg, stale_secs, service_name=""):
                 "reason": f"no bridge activity for {int(age)}s "
                           f"(log/DB not written — service likely stopped)"}
     return {"status": "ok", "source": "files", "last_activity": last, "age": age,
-            "reason": f"active — last wrote {int(age)}s ago"}
+            "reason": f"writing (last {int(age)}s ago; no service found to query)"}
 
 
 def _load_state():

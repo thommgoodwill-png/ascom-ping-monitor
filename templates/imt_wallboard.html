@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ site_name }} — Telligence wallboard</title>
+<!-- no favicon request (fully self-contained, opens on anything) -->
+<link rel="icon" href="data:,">
+<style>
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; height:100%; background:#0b0f14; color:#eef3f8;
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif; }
+  body{ display:flex; flex-direction:column; min-height:100vh; }
+  header{ display:flex; align-items:center; gap:18px; padding:14px 24px;
+    background:#141b24; border-bottom:1px solid #26313d; flex-wrap:wrap; }
+  header .logo{ height:26px; width:auto; }
+  header .site{ font-size:22px; font-weight:800; letter-spacing:.2px; }
+  header .area{ font-size:18px; color:#8fa0b3; }
+  header .spacer{ flex:1; }
+  header .clock{ font-size:26px; font-weight:700; font-variant-numeric:tabular-nums; }
+  header .dot{ width:12px; height:12px; border-radius:50%; background:#30a46c;
+    box-shadow:0 0 10px #30a46c; }
+  header .dot.stale{ background:#f5a524; box-shadow:0 0 10px #f5a524; }
+  header .dot.off{ background:#e5484d; box-shadow:0 0 10px #e5484d; }
+  .chips{ display:flex; gap:8px; flex-wrap:wrap; padding:10px 24px 0; }
+  .chip{ padding:6px 12px; border-radius:999px; background:#1b242f;
+    color:#eef3f8; text-decoration:none; font-size:14px; border:1px solid #26313d; }
+  .chip.active{ background:#3b82f6; border-color:#3b82f6; font-weight:700; }
+  main{ flex:1; padding:18px 24px; }
+  .empty{ display:flex; height:100%; min-height:50vh; align-items:center;
+    justify-content:center; flex-direction:column; gap:10px; color:#30a46c; }
+  .empty .big{ font-size:44px; font-weight:800; }
+  .empty .sub{ color:#8fa0b3; font-size:18px; }
+  /* full-width call banners, coloured by call level (matches the Telligence page) */
+  .calls{ display:flex; flex-direction:column; gap:12px; }
+  .call{ display:flex; align-items:center; gap:22px; padding:18px 26px;
+    border-radius:14px; color:#fff; overflow:hidden; }
+  .call .loc{ font-size:38px; font-weight:800; line-height:1.05; flex:0 0 auto; }
+  .call .mid{ flex:1; min-width:0; }
+  .call .type{ font-size:24px; font-weight:700; }
+  .call .sub{ font-size:14px; opacity:.85; font-family:monospace; margin-top:2px; }
+  .call .right{ display:flex; align-items:center; gap:22px; margin-left:auto; white-space:nowrap; }
+  .call .prio{ font-size:16px; font-weight:800; background:rgba(255,255,255,.24);
+    padding:4px 14px; border-radius:20px; }
+  .call .dur{ font-size:34px; font-weight:800; font-variant-numeric:tabular-nums; }
+  .lvl-emergency{ background:#DA291C; }
+  .lvl-wc{ background:#e8590c; }
+  .lvl-call{ background:#f08c00; }
+  .lvl-presence{ background:#2f9e44; }
+  .lvl-staff{ background:#1c7ed6; }
+  .lvl-other{ background:#868e96; }
+  .call.lvl-emergency{ animation:pulse 1.3s ease-in-out infinite; }
+  @keyframes pulse{ 0%,100%{ box-shadow:0 0 0 0 rgba(218,41,28,0);} 50%{ box-shadow:0 0 0 7px rgba(218,41,28,.5);} }
+  .section-h{ font-size:15px; text-transform:uppercase; letter-spacing:.08em;
+    color:#8fa0b3; margin:24px 0 10px; }
+  .faults{ display:flex; flex-direction:column; gap:10px; }
+  .fault{ display:flex; align-items:center; gap:18px; padding:14px 22px; border-radius:12px;
+    background:rgba(218,41,28,.14); border:1px solid rgba(218,41,28,.5); }
+  .fault .rm{ font-size:24px; font-weight:800; }
+  .fault .ft{ color:#ff7676; font-weight:700; }
+  .fault .du{ color:#8fa0b3; font-size:14px; margin-left:auto; }
+  footer{ padding:8px 24px 12px; color:#8fa0b3; font-size:12px; text-align:right; }
+</style>
+</head>
+<body>
+<header>
+  <svg class="logo" viewBox="0 0 313.9 61.0" role="img" aria-label="ascom" xmlns="http://www.w3.org/2000/svg"><path fill="#FFFFFF" stroke="#FFFFFF" stroke-width="2.2" stroke-linejoin="round" fill-rule="nonzero" d="M19.35 57.94 Q11.69 57.94 7.40 53.77 Q3.10 49.58 3.10 42.02 Q3.10 33.82 8.44 29.52 Q13.79 25.23 23.94 25.12 L35.32 24.93 L35.32 22.24 Q35.32 17.07 33.51 14.55 Q31.71 12.04 27.60 12.04 Q23.80 12.04 22.01 13.77 Q20.23 15.51 19.79 19.51 L5.49 18.82 Q6.80 11.12 12.54 7.13 Q18.27 3.15 28.19 3.15 Q38.19 3.15 43.62 8.08 Q49.04 13.01 49.04 22.10 L49.04 41.33 Q49.04 45.77 50.04 47.46 Q51.04 49.15 53.38 49.15 Q54.94 49.15 56.41 48.85 L56.41 56.27 Q55.19 56.57 54.21 56.82 Q53.24 57.05 52.26 57.19 Q51.29 57.35 50.18 57.44 Q49.08 57.55 47.63 57.55 Q42.44 57.55 39.98 55.01 Q37.52 52.46 37.02 47.54 L36.74 47.54 Q30.98 57.94 19.35 57.94 Z M35.32 32.49 L28.29 32.60 Q23.51 32.79 21.51 33.65 Q19.51 34.49 18.44 36.26 Q17.40 38.01 17.40 40.94 Q17.40 44.71 19.13 46.54 Q20.87 48.37 23.74 48.37 Q26.98 48.37 29.63 46.62 Q32.29 44.85 33.80 41.76 Q35.32 38.65 35.32 35.18 L35.32 32.49 Z M107.29 41.52 Q107.29 49.19 101.01 53.57 Q94.75 57.94 83.65 57.94 Q72.78 57.94 66.98 54.51 Q61.20 51.05 59.29 43.77 L71.36 41.98 Q72.39 45.73 74.89 47.29 Q77.40 48.85 83.65 48.85 Q89.42 48.85 92.06 47.40 Q94.70 45.93 94.70 42.80 Q94.70 40.26 92.57 38.77 Q90.45 37.29 85.37 36.26 Q73.75 33.96 69.68 31.99 Q65.64 30.01 63.51 26.87 Q61.39 23.71 61.39 19.12 Q61.39 11.55 67.22 7.33 Q73.06 3.10 83.76 3.10 Q93.18 3.10 98.92 6.77 Q104.65 10.43 106.07 17.37 L93.92 18.63 Q93.32 15.41 91.03 13.82 Q88.73 12.23 83.76 12.23 Q78.87 12.23 76.43 13.48 Q74.00 14.73 74.00 17.65 Q74.00 19.94 75.87 21.29 Q77.75 22.63 82.20 23.51 Q88.40 24.79 93.20 26.13 Q98.01 27.46 100.92 29.32 Q103.82 31.18 105.56 34.08 Q107.29 36.99 107.29 41.52 Z M140.39 57.94 Q128.39 57.94 121.85 50.79 Q115.30 43.63 115.30 30.83 Q115.30 17.76 121.89 10.46 Q128.49 3.15 140.60 3.15 Q149.92 3.15 156.02 7.83 Q162.13 12.52 163.69 20.77 L149.88 21.46 Q149.28 17.41 146.94 14.99 Q144.60 12.57 140.30 12.57 Q129.71 12.57 129.71 30.30 Q129.71 48.55 140.50 48.55 Q144.41 48.55 147.03 46.10 Q149.67 43.63 150.31 38.74 L164.08 39.38 Q163.35 44.80 160.19 49.05 Q157.05 53.30 151.92 55.63 Q146.80 57.94 140.39 57.94 Z M224.18 30.49 Q224.18 43.33 217.06 50.65 Q209.93 57.94 197.34 57.94 Q184.98 57.94 177.95 50.62 Q170.91 43.29 170.91 30.49 Q170.91 17.76 177.95 10.46 Q184.98 3.15 197.62 3.15 Q210.57 3.15 217.37 10.21 Q224.18 17.26 224.18 30.49 Z M209.84 30.49 Q209.84 21.07 206.76 16.82 Q203.68 12.57 197.82 12.57 Q185.32 12.57 185.32 30.49 Q185.32 39.33 188.37 43.94 Q191.43 48.55 197.18 48.55 Q209.84 48.55 209.84 30.49 Z M266.19 56.96 L266.19 27.32 Q266.19 13.40 258.17 13.40 Q254.01 13.40 251.40 17.65 Q248.80 21.90 248.80 28.63 L248.80 56.96 L235.08 56.96 L235.08 15.94 Q235.08 11.69 234.95 8.99 Q234.83 6.27 234.69 4.13 L247.76 4.13 Q247.92 5.05 248.15 9.08 Q248.40 13.12 248.40 14.63 L248.61 14.63 Q251.14 8.57 254.92 5.83 Q258.70 3.10 263.98 3.10 Q276.09 3.10 278.69 14.63 L278.97 14.63 Q281.65 8.48 285.40 5.79 Q289.17 3.10 294.98 3.10 Q302.70 3.10 306.75 8.35 Q310.81 13.60 310.81 23.41 L310.81 56.96 L297.19 56.96 L297.19 27.32 Q297.19 13.40 289.17 13.40 Q285.17 13.40 282.61 17.29 Q280.05 21.16 279.80 28.01 L279.80 56.96 L266.19 56.96 Z"/></svg>
+  <span class="site">{{ site_name }}</span>
+  <span class="area" id="area-name"></span>
+  <span class="spacer"></span>
+  <span class="dot" id="conn-dot" title="live"></span>
+  <span class="clock" id="clock">--:--</span>
+</header>
+<div class="chips" id="chips"></div>
+<main id="board"></main>
+<footer><span id="foot"></span></footer>
+
+<script>
+/* Plain ES5 + XMLHttpRequest, no external requests — opens on any browser. */
+(function(){
+  "use strict";
+  var TOKEN = {{ token|tojson }};
+  var AREA  = {{ area|tojson }};
+  var REFRESH = Math.max(3, parseInt("{{ refresh }}", 10) || 10);
+  var SITE = {{ site_name|tojson }};
+  var lastOk = 0;
+
+  function esc(s){ var d = document.createElement("div"); d.appendChild(document.createTextNode(s == null ? "" : String(s))); return d.innerHTML; }
+  function two(n){ return (n < 10 ? "0" : "") + n; }
+  function dur(sec){
+    sec = Math.max(0, Math.floor(sec));
+    var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    return (h ? h + ":" : "") + two(m) + ":" + two(s);
+  }
+  function lvlClass(c){
+    c = (c || "other").toLowerCase();
+    if (c !== "emergency" && c !== "wc" && c !== "call" && c !== "presence" && c !== "staff") c = "other";
+    return "lvl-" + c;
+  }
+  function byId(id){ return document.getElementById(id); }
+
+  function render(d){
+    byId("area-name").innerHTML = AREA ? "· " + esc(d.area_name || AREA) : "· All duty areas";
+    var chips = byId("chips"); var ch = "";
+    if (!AREA && d.duty_areas && d.duty_areas.length > 1){
+      for (var i = 0; i < d.duty_areas.length; i++){
+        var z = d.duty_areas[i];
+        ch += '<a class="chip" href="?area=' + encodeURIComponent(z.string) + '">' + esc(z.name) + '</a>';
+      }
+    }
+    chips.innerHTML = ch;
+
+    var active = d.active || [], faults = d.faults || [];
+    var board = byId("board");
+    if (!active.length && !faults.length){
+      board.innerHTML = '<div class="empty"><div class="big">All clear</div>' +
+        '<div class="sub">No active calls' + (AREA ? " in this duty area" : "") + '</div></div>';
+      return;
+    }
+    var html = "";
+    if (active.length){
+      html += '<div class="calls">';
+      for (var a = 0; a < active.length; a++){
+        var c = active[a];
+        var loc = c.name || c.location_text || c.location_string || "Unknown";
+        var cat = (c.category || "other").toLowerCase();
+        var prio = c.priority || "";
+        var sub = (!AREA && c.duty) ? c.duty.name : "";
+        html += '<div class="call ' + lvlClass(cat) + '">' +
+          '<div class="loc">' + esc(loc) + '</div>' +
+          '<div class="mid"><div class="type">' + esc(c.event_text || "Call") + '</div>' +
+            (sub ? '<div class="sub">' + esc(sub) + '</div>' : '') + '</div>' +
+          '<div class="right">' +
+            (prio ? '<span class="prio">' + esc(prio) + '</span>' : '') +
+            '<span class="dur" data-ts="' + (c.raised_ts || 0) + '">--:--</span>' +
+          '</div></div>';
+      }
+      html += '</div>';
+    }
+    if (faults.length){
+      html += '<div class="section-h">Device faults (' + faults.length + ')</div><div class="faults">';
+      for (var f = 0; f < faults.length; f++){
+        var x = faults[f];
+        html += '<div class="fault"><div class="rm">' + esc(x.name || x.location_text || x.ident) + '</div>' +
+          '<div class="ft">' + esc(x.detail || "Fault") + '</div>' +
+          (!AREA && x.duty ? '<div class="du">' + esc(x.duty.name) + '</div>' : '') +
+          '</div>';
+      }
+      html += '</div>';
+    }
+    board.innerHTML = html;
+    tickDurations();
+  }
+
+  function tickDurations(){
+    var now = (new Date()).getTime() / 1000;
+    var els = document.getElementsByClassName("dur");
+    for (var i = 0; i < els.length; i++){
+      var ts = parseFloat(els[i].getAttribute("data-ts")) || 0;
+      els[i].innerHTML = ts ? dur(now - ts) : "--:--";
+    }
+  }
+
+  function setConn(state){
+    byId("conn-dot").className = "dot" + (state === "off" ? " off" : state === "stale" ? " stale" : "");
+  }
+
+  function load(){
+    var xhr = new XMLHttpRequest();
+    var url = "/api/w/tel/" + encodeURIComponent(TOKEN) +
+      (AREA ? "?area=" + encodeURIComponent(AREA) + "&" : "?") + "_=" + (new Date()).getTime();
+    xhr.open("GET", url, true);
+    xhr.onreadystatechange = function(){
+      if (xhr.readyState !== 4) return;
+      if (xhr.status === 200){
+        var d;
+        try { d = JSON.parse(xhr.responseText); } catch (e){ return; }
+        lastOk = (new Date()).getTime(); setConn("ok"); render(d);
+        byId("foot").innerHTML = esc(SITE) + " · updated " + esc((new Date()).toLocaleTimeString());
+      } else {
+        setConn((new Date()).getTime() - lastOk > REFRESH * 3000 ? "off" : "stale");
+      }
+    };
+    try { xhr.send(); } catch (e){ setConn("off"); }
+  }
+
+  function clock(){
+    var n = new Date();
+    byId("clock").innerHTML = two(n.getHours()) + ":" + two(n.getMinutes()) + ":" + two(n.getSeconds());
+  }
+
+  clock(); load();
+  setInterval(clock, 1000);
+  setInterval(tickDurations, 1000);
+  setInterval(load, REFRESH * 1000);
+})();
+</script>
+</body>
+</html>

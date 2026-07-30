@@ -26,6 +26,20 @@
 </div>
 
 <div class="card">
+  <h2>Duty-area wallboards <span class="muted" style="font-weight:400;font-size:13px;">— shareable read-only displays</span></h2>
+  <p class="card-sub">Open a live calls + faults board for a duty area on any remote
+    browser or wall display — no login needed. Anyone with a link can view that
+    board, so treat the links as secret. Regenerating the links revokes every
+    existing one.</p>
+  <div id="wall-list">Loading…</div>
+  <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
+    <button class="btn" id="wall-refresh">Refresh list</button>
+    <button class="btn danger" id="wall-regen" style="margin-left:auto;">Regenerate links (revoke old)</button>
+  </div>
+  <div id="wall-out" class="muted" style="margin-top:8px;font-size:13px;"></div>
+</div>
+
+<div class="card">
   <h2>Stored data</h2>
   <p class="card-sub">Clear the stored ping history, events and the failed-ping
     tallies for every device at this site. The devices themselves are kept — only
@@ -83,6 +97,52 @@
     saveAgent({ ping_interval: null, warn_ms: null, crit_ms: null });
   });
   loadAgent();
+
+  // ---- duty-area wallboard links ----
+  function esc(s){ const d=document.createElement("div"); d.textContent=s==null?"":s; return d.innerHTML; }
+  async function loadWall() {
+    const box = document.getElementById("wall-list");
+    box.textContent = "Loading…";
+    try {
+      const w = await api("/api/sites/" + SID + "/wall");
+      const token = w.token;
+      let duties = [];
+      try { duties = (await api("/api/imt/calls?site=" + SID)).duty_areas || []; } catch (e) {}
+      const origin = window.location.origin;
+      const base = origin + "/w/tel/" + token;
+      const rows = [["All duty areas", base]];
+      for (const d of duties) rows.push([d.name, base + "?area=" + encodeURIComponent(d.string)]);
+      let h = '<table class="list"><thead><tr><th>Board</th><th>Shareable link</th><th class="right">Actions</th></tr></thead><tbody>';
+      for (const [name, url] of rows) {
+        h += '<tr><td style="font-weight:600;">' + esc(name) + '</td>' +
+          '<td class="mono" style="font-size:12px;word-break:break-all;">' + esc(url) + '</td>' +
+          '<td class="right" style="white-space:nowrap;">' +
+          '<a class="btn small" href="' + esc(url) + '" target="_blank" rel="noopener">Open</a> ' +
+          '<button class="btn small wall-copy" data-url="' + esc(url) + '">Copy</button></td></tr>';
+      }
+      h += '</tbody></table>';
+      if (!duties.length) h += '<div class="f-help">No duty areas seen yet for this site — ' +
+        'the "All duty areas" board works now; per-area links appear once the site\'s ' +
+        'bridge has reported its duty areas.</div>';
+      box.innerHTML = h;
+      box.querySelectorAll(".wall-copy").forEach(b => b.addEventListener("click", async () => {
+        try { await navigator.clipboard.writeText(b.dataset.url); toast("Link copied"); }
+        catch (e) { toast("Copy failed — select the link manually", true); }
+      }));
+    } catch (e) { box.innerHTML = '<span class="v-crit">' + esc(e.message) + '</span>'; }
+  }
+  document.getElementById("wall-refresh").addEventListener("click", loadWall);
+  document.getElementById("wall-regen").addEventListener("click", async () => {
+    if (!confirm("Regenerate the wallboard links? Every existing link for this site " +
+                 "will stop working and any displays using them must be updated.")) return;
+    const out = document.getElementById("wall-out"); out.textContent = "Regenerating…";
+    try {
+      await api("/api/sites/" + SID + "/wall/regenerate", { method: "POST", body: "{}" });
+      out.innerHTML = '<span class="v-good">✓ New links issued. Old links now revoked.</span>';
+      loadWall();
+    } catch (e) { out.innerHTML = '<span class="v-crit">✗ ' + e.message + '</span>'; }
+  });
+  loadWall();
 
   async function loadSummary() {
     try {

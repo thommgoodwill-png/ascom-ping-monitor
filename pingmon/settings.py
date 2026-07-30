@@ -108,6 +108,11 @@ DEFAULTS = {
     "tel_db_user": "",              # SQL login (sql auth only)
     "tel_db_password": "",          # SQL password (masked in the API)
 
+    # -------- local Telligence wallboards (standalone install, no controller) --
+    # Secret token for the no-login duty-area wallboards when this instance reads
+    # its own bridge directly (site_id=None). Sites use sites.wall_token instead.
+    "local_wall_token": "",
+
     # -------- ASCII call feed (dutyarea|position|location|callstate over IP) --------
     # Streams one delimited line per call transition to a third-party receiver
     # (display board / paging gateway / logger). Purely outbound — a Reset line

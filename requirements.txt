@@ -1,6 +1,9 @@
 flask>=2.2
 waitress>=2.1
 qrcode>=7.0
+# CA bundle so the site agent can verify a controller behind Cloudflare / any
+# public cert even when the OS root store is missing or outdated (Windows Server).
+certifi>=2023.7
 
 # Telligence config DB (device type/serial) lookup over SQL Server.
 # python-tds is pure Python (works everywhere, SQL auth). For Windows/trusted

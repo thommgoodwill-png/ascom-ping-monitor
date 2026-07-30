@@ -28,7 +28,7 @@ call build-venv\Scripts\activate.bat
 
 echo === Installing dependencies (flask, waitress, pystray, pillow, pyinstaller)...
 pip install --quiet --upgrade pip
-pip install --quiet flask waitress pystray pillow pyinstaller python-tds || (echo pip install failed & pause & exit /b 1)
+pip install --quiet flask waitress pystray pillow pyinstaller python-tds certifi || (echo pip install failed & pause & exit /b 1)
 
 echo === Installing pyodbc (for Windows-auth SQL Server; optional)...
 pip install --quiet pyodbc || echo    (pyodbc unavailable - SQL-login auth will still work via python-tds)
@@ -45,6 +45,8 @@ pyinstaller --noconfirm --clean --onefile --noconsole ^
     --hidden-import pyodbc ^
     --hidden-import pytds ^
     --collect-submodules pytds ^
+    --hidden-import certifi ^
+    --collect-data certifi ^
     run.py
 if errorlevel 1 (echo BUILD FAILED & pause & exit /b 1)
 

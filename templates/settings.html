@@ -236,6 +236,18 @@
       <input type="number" id="agent-interval" min="10" max="600" step="5" value="30">
     </div>
   </div>
+  <div class="f-row">
+    <div style="flex:1;">
+      <label style="display:inline-flex;align-items:center;gap:8px;">
+        <input type="checkbox" id="agent-insecure">
+        <span class="f-label" style="margin:0;">Allow self-signed certificate</span>
+      </label>
+      <div class="f-help">Tick only if the controller uses HTTPS with a self-signed
+        certificate and you get a <code>CERTIFICATE_VERIFY_FAILED</code> error. This
+        skips TLS certificate verification for the controller connection — use only
+        on a trusted network. If the controller is plain HTTP, leave this off.</div>
+    </div>
+  </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;">
     <button class="btn" id="agent-test">Test connection</button>
     <span class="muted" id="agent-status" style="align-self:center;"></span>
@@ -453,6 +465,7 @@
       document.getElementById("agent-hub").value = ag.config.hub_url || "";
       document.getElementById("agent-key").value = ag.config.site_key || "";
       document.getElementById("agent-interval").value = ag.config.interval || 30;
+      document.getElementById("agent-insecure").checked = !!ag.config.insecure;
       const as = document.getElementById("agent-status");
       if (ag.status.last_error) { as.textContent = "Last error: " + ag.status.last_error; as.style.color = "var(--crit-text)"; }
       else if (ag.status.last_push) { as.textContent = "Last push " + new Date(ag.status.last_push*1000).toLocaleString() + " (" + ag.status.last_pushed_count + " pings)"; as.style.color = "var(--good-text)"; }
@@ -484,6 +497,7 @@
           hub_url: document.getElementById("agent-hub").value.trim(),
           site_key: document.getElementById("agent-key").value.trim(),
           interval: parseInt(document.getElementById("agent-interval").value, 10) || 30,
+          insecure: document.getElementById("agent-insecure").checked,
         }) });
       }
       toast("Settings saved");
@@ -500,7 +514,8 @@
     try {
       const r = await api("/api/agent/test", { method: "POST", body: JSON.stringify({
         hub_url: document.getElementById("agent-hub").value.trim(),
-        site_key: document.getElementById("agent-key").value.trim() }) });
+        site_key: document.getElementById("agent-key").value.trim(),
+        insecure: document.getElementById("agent-insecure").checked }) });
       as.textContent = "✓ Connected to site “" + (r.site ? r.site.name : "?") + "” — " + r.devices + " device(s) configured";
       as.style.color = "var(--good-text)";
       toast("Hub connection OK");

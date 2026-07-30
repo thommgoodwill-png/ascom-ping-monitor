@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import socket
+import ssl
 import threading
 import time
 import urllib.request
@@ -36,10 +37,13 @@ def load_conf():
         "hub_url": (c.get("hub_url") or "").rstrip("/"),
         "site_key": c.get("site_key") or "",
         "interval": int(c.get("interval", 30)),   # seconds between pushes
+        # allow a self-signed / untrusted controller TLS cert (opt-in, insecure)
+        "insecure": bool(c.get("insecure", False)),
     }
 
 
-def save_conf(hub_url=None, site_key=None, enabled=None, interval=None):
+def save_conf(hub_url=None, site_key=None, enabled=None, interval=None,
+              insecure=None):
     c = load_conf()
     if hub_url is not None:
         c["hub_url"] = hub_url.rstrip("/")
@@ -49,6 +53,8 @@ def save_conf(hub_url=None, site_key=None, enabled=None, interval=None):
         c["enabled"] = bool(enabled)
     if interval is not None:
         c["interval"] = max(10, min(600, int(interval)))
+    if insecure is not None:
+        c["insecure"] = bool(insecure)
     os.makedirs(database.DATA_DIR, exist_ok=True)
     with open(CONF_PATH, "w") as f:
         json.dump(c, f)
@@ -75,28 +81,64 @@ def _save_state(st):
         pass
 
 
-def _post(url, key, payload, timeout=20):
+try:
+    import certifi
+    _CA_FILE = certifi.where()
+except Exception:                       # certifi not bundled — fall back to OS store
+    _CA_FILE = None
+
+
+def _ssl_ctx(url, insecure):
+    """SSL context for an agent request.
+
+    * plain HTTP  -> None (no TLS).
+    * HTTPS, insecure opted in -> verification OFF (accept self-signed).
+    * HTTPS, normal -> a VERIFYING context that trusts BOTH certifi's bundled CA
+      roots AND the OS trust store. The certifi bundle is what makes a valid
+      public cert (e.g. a controller behind Cloudflare) verify even on a Windows
+      box whose root store is missing/outdated — the cause of the
+      'unable to get local issuer certificate' error."""
+    if not str(url).lower().startswith("https"):
+        return None
+    if insecure:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+    ctx = ssl.create_default_context(cafile=_CA_FILE) if _CA_FILE \
+        else ssl.create_default_context()
+    try:
+        ctx.load_default_certs(ssl.Purpose.SERVER_AUTH)   # also trust OS roots
+    except Exception:
+        pass
+    return ctx
+
+
+def _post(url, key, payload, timeout=20, insecure=False):
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST", headers={
         "Content-Type": "application/json",
         "Authorization": "Bearer " + key,
         "User-Agent": "AscomNetworkMonitor-Agent/" + AGENT_VERSION})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with urllib.request.urlopen(req, timeout=timeout,
+                               context=_ssl_ctx(url, insecure)) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def _get(url, key, timeout=20):
+def _get(url, key, timeout=20, insecure=False):
     req = urllib.request.Request(url, headers={
         "Authorization": "Bearer " + key,
         "User-Agent": "AscomNetworkMonitor-Agent/" + AGENT_VERSION})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with urllib.request.urlopen(req, timeout=timeout,
+                               context=_ssl_ctx(url, insecure)) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def test_connection(hub_url, site_key):
+def test_connection(hub_url, site_key, insecure=False):
     """Synchronous config fetch so the GUI can confirm the hub + key work."""
     hub_url = hub_url.rstrip("/")
-    cfg = _get(f"{hub_url}/agent/v1/config?v={AGENT_VERSION}", site_key, timeout=15)
+    cfg = _get(f"{hub_url}/agent/v1/config?v={AGENT_VERSION}", site_key,
+               timeout=15, insecure=insecure)
     return {"site": cfg.get("site"), "devices": len(cfg.get("devices", []))}
 
 
@@ -167,7 +209,8 @@ class Agent:
         }
         if not payload["devices"]:
             return
-        resp = _post(f"{c['hub_url']}/agent/v1/devices", c["site_key"], payload)
+        resp = _post(f"{c['hub_url']}/agent/v1/devices", c["site_key"], payload,
+                     insecure=c.get("insecure", False))
         id_map = resp.get("id_map") or {}
         tagged = 0
         for local_id_str, hub_id in id_map.items():
@@ -188,7 +231,7 @@ class Agent:
         added on this agent (and pushed up via _register_local) are never
         removed here — only pure hub-side mirrors are updated."""
         url = f"{c['hub_url']}/agent/v1/config?v={AGENT_VERSION}&host={self._hostname()}"
-        cfg = _get(url, c["site_key"])
+        cfg = _get(url, c["site_key"], insecure=c.get("insecure", False))
         wanted = {int(d["id"]): d for d in cfg.get("devices", [])}
         # index local devices already linked to a hub device
         local = {d["hub_id"]: d for d in database.list_devices()
@@ -244,7 +287,8 @@ class Agent:
         _post(f"{c['hub_url']}/agent/v1/imt", c["site_key"],
               {"version": AGENT_VERSION, "host": self._hostname(),
                "devices": dev_out, "events": ev_out,
-               "calls_active": ca_out, "calls_history": ch_out})
+               "calls_active": ca_out, "calls_history": ch_out},
+              insecure=c.get("insecure", False))
         if events:
             st = _load_state()
             st["imt_event_wm"] = max(e["id"] for e in events)
@@ -273,9 +317,32 @@ class Agent:
                 "monitoring": bool(settings.get("monitoring_enabled")),
                 "last_error": self.last_error,
                 "sample": sample,
+                "imt": self._imt_diag(),
             }
         except Exception as e:
             return {"diag_error": f"{type(e).__name__}: {e}"}
+
+    def _imt_diag(self):
+        """The agent's local Telligence reader state, so the controller can see
+        why (say) faults arrive but calls don't. Calls only flow through the
+        bridge LOG, so a reader with a DB path but no log path forwards faults
+        yet never calls. Never raises."""
+        try:
+            from . import imtbridge as ib
+            cfg = ib.load_cfg()
+            calls = database.imt_call_counts(None)
+            faults = sum(1 for d in database.imt_list_devices(None)
+                         if d["status"] == "failed")
+            return {
+                "enabled": cfg["enabled"],
+                "db_path_set": bool(cfg["db_path"]),
+                "log_path_set": bool(cfg["log_path"]),
+                "log_exists": bool(cfg["log_path"]) and os.path.exists(cfg["log_path"]),
+                "active_calls": calls.get("active", 0),
+                "faults": faults,
+            }
+        except Exception as e:
+            return {"error": f"{type(e).__name__}: {e}"}
 
     def _push(self, c):
         st = _load_state()
@@ -286,7 +353,8 @@ class Agent:
         if not id_map:
             # nothing registered yet — heartbeat so the hub still sees us + diag
             _post(f"{c['hub_url']}/agent/v1/heartbeat", c["site_key"],
-                  {"version": AGENT_VERSION, "host": self._hostname(), "diag": diag})
+                  {"version": AGENT_VERSION, "host": self._hostname(), "diag": diag},
+                  insecure=c.get("insecure", False))
             return
 
         # Self-heal a stale watermark: if it's ahead of the highest local ping
@@ -339,13 +407,15 @@ class Agent:
         if not by_hub and not ev_out:
             # nothing new — still heartbeat (with diag) so the hub shows us online
             _post(f"{c['hub_url']}/agent/v1/heartbeat", c["site_key"],
-                  {"version": AGENT_VERSION, "host": self._hostname(), "diag": diag})
+                  {"version": AGENT_VERSION, "host": self._hostname(), "diag": diag},
+                  insecure=c.get("insecure", False))
             return
 
         payload = {"version": AGENT_VERSION, "host": self._hostname(),
                    "now": time.time(),
                    "pings": by_hub, "events": ev_out, "macs": macs, "diag": diag}
-        resp = _post(f"{c['hub_url']}/agent/v1/report", c["site_key"], payload)
+        resp = _post(f"{c['hub_url']}/agent/v1/report", c["site_key"], payload,
+                     insecure=c.get("insecure", False))
         st["ping_wm"] = max_pid
         st["event_wm"] = max_eid
         _save_state(st)

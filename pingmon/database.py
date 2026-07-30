@@ -1,5 +1,6 @@
 """SQLite storage layer for the Ascom Network Monitor."""
 import os
+import secrets
 import sqlite3
 import threading
 import time
@@ -120,6 +121,8 @@ def init_db():
     _ensure_column(db, "sites", "ping_interval", "ping_interval REAL")
     _ensure_column(db, "sites", "warn_ms", "warn_ms REAL")
     _ensure_column(db, "sites", "crit_ms", "crit_ms REAL")
+    # secret token for the no-login Telligence duty-area wallboards
+    _ensure_column(db, "sites", "wall_token", "wall_token TEXT")
     # ---- users / roles / 2FA ----
     db.execute("""CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1093,6 +1096,41 @@ def update_site(site_id, **fields):
     db = get_db()
     db.execute(f"UPDATE sites SET {', '.join(sets)} WHERE id=?", vals)
     db.commit()
+
+
+def get_or_create_wall_token(site_id):
+    """The site's wallboard token, generating (and storing) one if absent."""
+    db = get_db()
+    r = db.execute("SELECT wall_token FROM sites WHERE id=?", (site_id,)).fetchone()
+    if not r:
+        return None
+    tok = r["wall_token"]
+    if not tok:
+        tok = secrets.token_urlsafe(24)
+        db.execute("UPDATE sites SET wall_token=? WHERE id=?", (tok, site_id))
+        db.commit()
+    return tok
+
+
+def regenerate_wall_token(site_id):
+    """Issue a fresh wallboard token, invalidating any existing shared links."""
+    tok = secrets.token_urlsafe(24)
+    db = get_db()
+    db.execute("UPDATE sites SET wall_token=? WHERE id=?", (tok, site_id))
+    db.commit()
+    return tok
+
+
+def site_by_wall_token(token):
+    """Resolve a wallboard token to its site (read-only kiosk access). None if
+    the token is blank/unknown."""
+    if not token:
+        return None
+    r = get_db().execute(
+        "SELECT s.*, c.name AS customer_name FROM sites s "
+        "JOIN customers c ON c.id=s.customer_id WHERE s.wall_token=?",
+        (token,)).fetchone()
+    return dict(r) if r else None
 
 
 def delete_site(site_id):
