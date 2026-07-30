@@ -1,171 +1,19 @@
-{% extends "base.html" %}
-{% block content %}
-<h1 class="page-title">User management</h1>
+flask>=2.2
+waitress>=2.1
+qrcode>=7.0
+# CA bundle so the site agent can verify a controller behind Cloudflare / any
+# public cert even when the OS root store is missing or outdated (Windows Server).
+certifi>=2023.7
 
-<div class="card">
-  <h2>Invite a user</h2>
-  <p class="card-sub">Send someone a link to create their own account. If email is
-    configured it's sent automatically; either way you get a copyable link.</p>
-  <div class="f-row">
-    <div><label class="f-label">Email</label><input type="email" id="i-email" placeholder="jsmith@ascom.com"></div>
-    <div><label class="f-label">Role</label>
-      <select id="i-role"><option value="standard">Standard</option><option value="admin">Admin</option></select>
-    </div>
-    <div><label class="f-label">Expires (days)</label><input type="number" id="i-days" value="7" min="1" max="30"></div>
-    <div style="display:flex;align-items:flex-end;"><button class="btn primary" id="i-send">✉ Send invite</button></div>
-  </div>
-  <div id="i-link-box" style="display:none;margin-top:6px;">
-    <div class="f-help" id="i-link-note"></div>
-    <div style="display:flex;gap:6px;margin-top:4px;">
-      <input type="text" id="i-link" readonly style="font-family:monospace;font-size:12px;">
-      <button class="btn small" id="i-copy">Copy</button>
-    </div>
-  </div>
-  <table class="list" id="inv-table" style="margin-top:14px;display:none;">
-    <thead><tr><th>Email</th><th>Role</th><th>Expires</th><th class="right">Actions</th></tr></thead>
-    <tbody></tbody>
-  </table>
-</div>
+# Telligence config DB (device type/serial) lookup over SQL Server.
+# python-tds is pure Python (works everywhere, SQL auth). For Windows/trusted
+# auth install pyodbc too (needs an ODBC Driver for SQL Server, which a SQL
+# Server install provides). The app runs fine without either — the Telligence
+# database feature just reports the driver as unavailable until one is present.
+python-tds>=1.13
+# pyodbc>=5.0        # uncomment on the Windows server for Windows-auth support
 
-<div class="card">
-  <h2>Create a user manually</h2>
-  <p class="card-sub">The email address is used as the username — the person signs in
-    with it. Standard users can use everything except User management and the
-    access-control settings. Admins can do everything. Passwords must be strong:
-    at least 10 characters with upper &amp; lowercase, a number and a symbol.</p>
-  <div class="f-row">
-    <div><label class="f-label">Email (used as username)</label><input type="email" id="u-email" placeholder="jsmith@ascom.com"></div>
-    <div><label class="f-label">Password</label><input type="password" id="u-pass" placeholder="strong password"></div>
-    <div><label class="f-label">Role</label>
-      <select id="u-role"><option value="standard">Standard</option><option value="admin">Admin</option></select>
-    </div>
-    <div style="display:flex;align-items:flex-end;"><button class="btn primary" id="u-add">+ Add user</button></div>
-  </div>
-</div>
-
-<div class="card">
-  <h2>Users</h2>
-  <table class="list" id="u-table">
-    <thead><tr><th>Username</th><th>Email</th><th>Role</th><th>2FA</th><th>Status</th><th>Last login</th><th class="right">Actions</th></tr></thead>
-    <tbody></tbody>
-  </table>
-</div>
-{% endblock %}
-
-{% block scripts %}
-<script>
-(function () {
-  "use strict";
-  const ME = "{{ current_user }}";
-
-  async function load() {
-    const d = await api("/api/users");
-    const tb = document.querySelector("#u-table tbody");
-    tb.innerHTML = "";
-    for (const u of d.users) {
-      const tr = document.createElement("tr");
-      const c = (t, cls) => { const td=document.createElement("td"); td.textContent=t; if(cls)td.className=cls; return td; };
-      const nameTd = c(u.username); nameTd.style.fontWeight="600";
-      if (u.username === ME) { const s=document.createElement("span"); s.className="muted"; s.textContent=" (you)"; nameTd.appendChild(s); }
-      tr.appendChild(nameTd);
-      tr.appendChild(c(u.email || "—", "muted"));
-      // role
-      const rTd = document.createElement("td");
-      const rsel = document.createElement("select"); rsel.style.width="auto";
-      rsel.innerHTML = '<option value="standard">Standard</option><option value="admin">Admin</option>';
-      rsel.value = u.role;
-      rsel.addEventListener("change", async () => {
-        try { await api("/api/users/"+u.id, {method:"PUT", body:JSON.stringify({role:rsel.value})}); load(); }
-        catch(e){ toast(e.message,true); load(); }
-      });
-      rTd.appendChild(rsel); tr.appendChild(rTd);
-      // 2FA
-      const fTd = c(u.totp_enabled ? "✓ on" : "off", u.totp_enabled ? "v-good" : "muted"); tr.appendChild(fTd);
-      // status
-      const sTd = c(u.disabled ? "Disabled" : "Active", u.disabled ? "v-crit" : "v-good"); tr.appendChild(sTd);
-      tr.appendChild(c(u.last_login ? new Date(u.last_login*1000).toLocaleString() : "never", "muted"));
-      // actions
-      const aTd = document.createElement("td"); aTd.className="right";
-      const mk = (label, cls, fn) => { const b=document.createElement("button"); b.className="btn small "+(cls||""); b.textContent=label; b.style.marginLeft="4px"; b.addEventListener("click",fn); return b; };
-      aTd.appendChild(mk("Reset pw","",async()=>{
-        const p=prompt("New password for "+u.username+"\n(min 10 chars, with upper & lowercase, a number and a symbol):"); if(!p) return;
-        try{ await api("/api/users/"+u.id,{method:"PUT",body:JSON.stringify({password:p})}); toast("Password reset"); }catch(e){ toast(e.message,true); }
-      }));
-      if (u.totp_enabled) aTd.appendChild(mk("Reset 2FA","",async()=>{
-        if(!confirm("Remove 2FA from "+u.username+"? They'll set it up again next login if required.")) return;
-        try{ await api("/api/users/"+u.id,{method:"PUT",body:JSON.stringify({reset_2fa:true})}); load(); }catch(e){ toast(e.message,true); }
-      }));
-      aTd.appendChild(mk(u.disabled?"Enable":"Disable","",async()=>{
-        try{ await api("/api/users/"+u.id,{method:"PUT",body:JSON.stringify({disabled:!u.disabled})}); load(); }catch(e){ toast(e.message,true); }
-      }));
-      if (u.username !== ME) aTd.appendChild(mk("Delete","danger",async()=>{
-        if(!confirm("Delete user "+u.username+"?")) return;
-        try{ await api("/api/users/"+u.id,{method:"DELETE"}); load(); }catch(e){ toast(e.message,true); }
-      }));
-      tr.appendChild(aTd);
-      tb.appendChild(tr);
-    }
-  }
-
-  async function loadInvites() {
-    const d = await api("/api/invites");
-    const tbl = document.getElementById("inv-table");
-    const tb = tbl.querySelector("tbody"); tb.innerHTML = "";
-    tbl.style.display = d.invites.length ? "table" : "none";
-    for (const inv of d.invites) {
-      const tr = document.createElement("tr");
-      const c=(t,cls)=>{const td=document.createElement("td");td.textContent=t;if(cls)td.className=cls;return td;};
-      tr.appendChild(c(inv.email));
-      tr.appendChild(c(inv.role));
-      tr.appendChild(c(new Date(inv.expires_at*1000).toLocaleString(), "muted"));
-      const aTd=document.createElement("td"); aTd.className="right";
-      const link = location.origin + "/invite/" + inv.token;
-      const cp=document.createElement("button"); cp.className="btn small"; cp.textContent="Copy link";
-      cp.addEventListener("click",()=>{navigator.clipboard.writeText(link); toast("Link copied");});
-      const rv=document.createElement("button"); rv.className="btn small danger"; rv.style.marginLeft="4px"; rv.textContent="Revoke";
-      rv.addEventListener("click", async ()=>{ try{ await api("/api/invites/"+inv.id,{method:"DELETE"}); loadInvites(); }catch(e){toast(e.message,true);} });
-      aTd.append(cp, rv); tr.appendChild(aTd);
-      tb.appendChild(tr);
-    }
-  }
-
-  document.getElementById("i-send").addEventListener("click", async () => {
-    const email = document.getElementById("i-email").value.trim();
-    if (!email) { toast("Email required", true); return; }
-    try {
-      const r = await api("/api/invites", { method:"POST", body:JSON.stringify({
-        email, role: document.getElementById("i-role").value,
-        expires_days: parseInt(document.getElementById("i-days").value,10)||7 })});
-      document.getElementById("i-email").value = "";
-      const box=document.getElementById("i-link-box");
-      box.style.display="block";
-      document.getElementById("i-link").value = r.link;
-      document.getElementById("i-link-note").innerHTML = r.emailed
-        ? "✓ Invite emailed. You can also share this link:"
-        : (r.email_error ? "Email failed ("+r.email_error+"). Share this link manually:"
-                         : "Email not configured — share this link manually:");
-      loadInvites();
-    } catch(e){ toast(e.message,true); }
-  });
-  document.getElementById("i-copy").addEventListener("click", () => {
-    navigator.clipboard.writeText(document.getElementById("i-link").value); toast("Link copied");
-  });
-
-  document.getElementById("u-add").addEventListener("click", async () => {
-    const body = {
-      email: document.getElementById("u-email").value.trim(),
-      password: document.getElementById("u-pass").value,
-      role: document.getElementById("u-role").value,
-    };
-    if (!body.email || !body.password) { toast("Email and password required", true); return; }
-    try {
-      await api("/api/users", { method:"POST", body:JSON.stringify(body) });
-      ["u-email","u-pass"].forEach(id=>document.getElementById(id).value="");
-      toast("User added"); load();
-    } catch(e){ toast(e.message,true); }
-  });
-  load();
-  loadInvites();
-})();
-</script>
-{% endblock %}
+# Optional: pysnmp enables pure-Python SNMP (works without the net-snmp CLI,
+# and on the Windows exe). Uncomment to include it. The Linux installer also
+# installs the `snmp` package, which the SNMP tool uses as a fallback.
+# pysnmp>=4.4

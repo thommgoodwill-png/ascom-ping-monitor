@@ -11,10 +11,9 @@ import subprocess
 import threading
 import time
 
-from . import monitor, oui
+from . import monitor, oui, proc
 
 IS_WINDOWS = platform.system() == "Windows"
-_NO_WINDOW = {"creationflags": 0x08000000} if IS_WINDOWS else {}
 
 
 # ---------------- subnet discovery ----------------
@@ -78,7 +77,7 @@ def path_analysis(host, cycles=5, max_hops=20):
 
 def _mtr(host, cycles, max_hops):
     try:
-        out = subprocess.run(
+        out = proc.run(
             ["mtr", "-n", "-r", "-c", str(cycles), "-m", str(max_hops), host],
             capture_output=True, text=True, timeout=cycles * max_hops + 30).stdout
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -111,8 +110,8 @@ def _traceroute_loop(host, cycles, max_hops):
         else:
             cmd = [tr, "-n", "-w", "1", "-q", "1", "-m", str(max_hops), host]
         try:
-            out = subprocess.run(cmd, capture_output=True, text=True,
-                                 timeout=max_hops * 2 + 20, **_NO_WINDOW).stdout
+            out = proc.run(cmd, capture_output=True, text=True,
+                            timeout=max_hops * 2 + 20).stdout
         except (OSError, subprocess.TimeoutExpired):
             continue
         for line in out.splitlines():
@@ -193,10 +192,10 @@ def snmp_get(host, community="public", version="2c"):
     if shutil.which("snmpget"):
         try:
             for name, oid in SNMP_OIDS.items():
-                out = subprocess.run(
+                out = proc.run(
                     ["snmpget", "-v", version, "-c", community, "-Ovq",
                      "-t", "2", "-r", "1", host, oid],
-                    capture_output=True, text=True, timeout=8, **_NO_WINDOW)
+                    capture_output=True, text=True, timeout=8)
                 v = out.stdout.strip()
                 if out.returncode == 0 and v:
                     results[name] = v.strip('"')
@@ -224,8 +223,8 @@ def iperf_test(host, seconds=5, reverse=False, port=5201):
     if reverse:
         cmd.append("-R")
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True,
-                             timeout=int(seconds) + 20, **_NO_WINDOW)
+        out = proc.run(cmd, capture_output=True, text=True,
+                             timeout=int(seconds) + 20)
     except (OSError, subprocess.TimeoutExpired) as e:
         return {"ok": False, "error": str(e)}
     import json

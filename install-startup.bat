@@ -1,79 +1,44 @@
-<!DOCTYPE html>
-{% set net_pages = ['devices','events','heatmap','sla','tools','capture','network_settings'] %}
-{% set tel_pages = ['telligence','telligence_settings'] %}
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}Ascom Network Monitor{% endblock %}</title>
-<link rel="icon" href="{{ favicon_url }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v={{ asset_ver }}">
-<script>
-  // apply saved theme before first paint to avoid flash
-  (function () {
-    var t = localStorage.getItem("pingmon-theme") || "{{ theme }}";
-    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
-  })();
-</script>
-</head>
-<body>
-<header class="topbar">
-  <a class="brand" href="/">
-    <img src="{{ logo_url }}" alt="ascom">
-    <span class="sub">NETWORK MONITOR</span>
-  </a>
-  <nav class="nav">
-    <a href="/" class="{{ 'active' if page == 'dashboard' }}">Dashboard</a>
-    <a href="/customers" class="{{ 'active' if page == 'customers' }}">Customers</a>
-    <a href="/devices" class="{{ 'active' if page in net_pages }}">Network Monitoring</a>
-    <a href="/telligence" class="{{ 'active' if page in tel_pages }}">Telligence Monitoring</a>
-    <a href="/settings" class="{{ 'active' if page == 'settings' }}">Settings</a>
-    {% if is_admin %}<a href="/users" class="{{ 'active' if page == 'users' }}">Users</a>{% endif %}
-  </nav>
-  <span class="spacer"></span>
-  <div class="top-actions">
-    <span class="mon-state" id="mon-state" title="Monitoring status">
-      <span class="dot"></span><span id="mon-state-text">…</span>
-    </span>
-    <a class="icon-btn" href="/wallboard" title="Wallboard mode (full-screen status)">▦</a>
-    <button class="icon-btn" id="theme-btn" title="Toggle light / dark mode">☾</button>
-    <a class="btn small" href="/account" title="Account &amp; 2FA">{{ current_user or 'Account' }}{% if is_admin %} · admin{% endif %}</a>
-    <a class="btn small" href="/logout">Log out</a>
-    {% if is_desktop %}
-    <button class="btn small danger" id="quit-btn" title="Stop the Network Monitor app">⏻ Quit</button>
-    {% endif %}
-  </div>
-</header>
-<main class="wrap">
-  {% if page in net_pages %}{% include "_net_subnav.html" %}{% endif %}
-  {% if page in tel_pages %}{% include "_tel_subnav.html" %}{% endif %}
-  {% block content %}{% endblock %}
-</main>
-<footer class="app-foot"><span class="muted">Ascom Network Monitor · build v{{ asset_ver }}</span></footer>
-<script src="{{ url_for('static', filename='js/app.js') }}?v={{ asset_ver }}"></script>
-<script src="{{ url_for('static', filename='js/charts.js') }}?v={{ asset_ver }}"></script>
-<script>initTheme("{{ theme }}");</script>
-<script>
-  (function () {
-    var q = document.getElementById("quit-btn");
-    if (!q) return;
-    q.addEventListener("click", async function () {
-      if (!confirm("Stop the Ascom Network Monitor?\n\nMonitoring and the web interface will shut down until you start the app again.")) return;
-      q.disabled = true; q.textContent = "Stopping…";
-      try {
-        await fetch("/api/shutdown", { method: "POST", credentials: "same-origin" });
-      } catch (e) { /* the server exits mid-request — expected */ }
-      document.body.innerHTML =
-        '<div style="max-width:460px;margin:16vh auto;text-align:center;' +
-        'font-family:system-ui,sans-serif;color:#52514e;">' +
-        '<div style="font-size:26px;font-weight:800;color:#DA291C;">ascom</div>' +
-        '<h2 style="margin:18px 0 8px;">Network Monitor stopped</h2>' +
-        '<p>You can close this browser tab. To start it again, launch the app ' +
-        '(or, on the container, <code>systemctl start ascom-ping-monitor</code>).</p>' +
-        '</div>';
-    });
-  })();
-</script>
-{% block scripts %}{% endblock %}
-</body>
-</html>
+@echo off
+REM ============================================================
+REM  Ascom Ping Monitor - run at Windows startup + open firewall
+REM  Right-click this file and choose "Run as administrator".
+REM  Keep it in the SAME folder as AscomPingMonitor.exe.
+REM ============================================================
+cd /d "%~dp0"
+
+if not exist "%~dp0AscomPingMonitor.exe" (
+    echo ERROR: AscomPingMonitor.exe not found next to this script.
+    echo        Copy this .bat into the same folder as the exe.
+    pause
+    exit /b 1
+)
+
+net session >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: administrator rights required.
+    echo        Right-click this file and "Run as administrator".
+    pause
+    exit /b 1
+)
+
+echo === Creating startup task (runs at boot, before anyone logs in)...
+schtasks /create /f /tn "Ascom Ping Monitor" ^
+    /tr "\"%~dp0AscomPingMonitor.exe\"" ^
+    /sc onstart /ru SYSTEM
+
+echo === Allowing port 8080 through Windows Firewall...
+netsh advfirewall firewall delete rule name="Ascom Ping Monitor" >nul 2>&1
+netsh advfirewall firewall add rule name="Ascom Ping Monitor" ^
+    dir=in action=allow protocol=TCP localport=8080
+
+echo === Starting it now...
+schtasks /run /tn "Ascom Ping Monitor"
+
+echo.
+echo ============================================================
+echo   Installed. The monitor now starts with Windows.
+echo   GUI:  http://localhost:8080   (or this PC's IP from
+echo   other machines)   Login: ascom / ascom!12345
+echo   To remove: run uninstall-startup.bat as administrator.
+echo ============================================================
+pause

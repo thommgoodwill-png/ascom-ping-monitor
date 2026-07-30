@@ -10,13 +10,11 @@ import subprocess
 import threading
 import time
 
-from . import database, netcheck, oui, settings
+from . import database, netcheck, oui, proc, settings
 
 log = logging.getLogger("pingmon.monitor")
 
 IS_WINDOWS = platform.system() == "Windows"
-# stop child processes flashing console windows when running as a windowed exe
-_NO_WINDOW = {"creationflags": 0x08000000} if IS_WINDOWS else {}
 
 _TIME_RE = re.compile(r"time[=<]([\d.]+)\s*ms", re.IGNORECASE)
 _TIME_RE_ANY = re.compile(r"[=<](\d+(?:\.\d+)?)\s*ms", re.IGNORECASE)  # localized Windows
@@ -31,15 +29,15 @@ def ping_once(host, timeout_s, size=56):
         cmd = ["ping", "-n", "-c", "1", "-W", str(int(max(1, timeout_s))),
                "-s", str(int(size)), host]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=timeout_s + 3, **_NO_WINDOW)
+        res = proc.run(cmd, capture_output=True, text=True,
+                       timeout=timeout_s + 3)
     except (subprocess.TimeoutExpired, OSError):
         return None
-    if proc.returncode != 0:
+    if res.returncode != 0:
         return None
     # a time= match is required: on Windows "Destination host unreachable"
     # replies still exit 0 but carry no time value
-    m = _TIME_RE.search(proc.stdout) or _TIME_RE_ANY.search(proc.stdout)
+    m = _TIME_RE.search(res.stdout) or _TIME_RE_ANY.search(res.stdout)
     if m:
         return float(m.group(1))
     return None
@@ -52,9 +50,9 @@ def run_traceroute(host):
     else:
         cmd = ["traceroute", "-n", "-w", "1", "-q", "1", "-m", "15", host]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=90 if IS_WINDOWS else 30, **_NO_WINDOW)
-        out = (proc.stdout or "").strip()
+        res = proc.run(cmd, capture_output=True, text=True,
+                       timeout=90 if IS_WINDOWS else 30)
+        out = (res.stdout or "").strip()
         return out[:4000] if out else None
     except (subprocess.TimeoutExpired, OSError):
         return None
@@ -77,9 +75,9 @@ def lookup_mac(ip):
     """
     try:
         if IS_WINDOWS:
-            proc = subprocess.run(["arp", "-a", ip], capture_output=True,
-                                  text=True, timeout=5, **_NO_WINDOW)
-            for line in proc.stdout.splitlines():
+            res = proc.run(["arp", "-a", ip], capture_output=True,
+                           text=True, timeout=5)
+            for line in res.stdout.splitlines():
                 if ip in line:
                     m = _MAC_RE.search(line)
                     if m:
@@ -87,9 +85,9 @@ def lookup_mac(ip):
             return None
         # Linux: prefer 'ip neigh', fall back to /proc/net/arp
         try:
-            proc = subprocess.run(["ip", "neigh", "show", "to", ip],
-                                  capture_output=True, text=True, timeout=5)
-            m = _MAC_RE.search(proc.stdout)
+            res = proc.run(["ip", "neigh", "show", "to", ip],
+                           capture_output=True, text=True, timeout=5)
+            m = _MAC_RE.search(res.stdout)
             if m:
                 return _normalize_mac(m.group(1))
         except OSError:
