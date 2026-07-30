@@ -50,12 +50,14 @@
         </label></div>
       <div><label class="f-label">Consider down after <span class="muted">(seconds idle)</span></label>
         <input type="number" id="imt_service_stale_secs" placeholder="180"></div>
-      <div style="flex:2;"><label class="f-label">Windows service name <span class="muted">(optional — authoritative)</span></label>
-        <input type="text" id="imt_service_name" placeholder="e.g. ImtBridge"></div>
+      <div style="flex:2;"><label class="f-label">Windows service name <span class="muted">(optional — auto-detected)</span></label>
+        <input type="text" id="imt_service_name" placeholder="auto (ImtBridge / ImtBridgeCore …)"></div>
     </div>
-    <div class="f-help">Flags the bridge as <b>down</b> if it stops writing its log/DB
-      for that long — catches a crashed or hung bridge even while the server still
-      pings. Naming the Windows service switches to an exact <code>sc query</code> check.</div>
+    <div class="f-help">By default this checks the <b>actual Windows service</b> — it
+      auto-detects the Ascom IMT&nbsp;Bridge service and reports <b>down</b> the moment
+      it stops or hangs. Set a name only to override the auto-detection. If no service
+      is found (e.g. the monitor runs on a different box), it falls back to flagging the
+      bridge down when its log/DB stops being written for the time above.</div>
   </div>
 
   <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
@@ -177,6 +179,20 @@
     <span id="feed-status" class="muted" style="margin-left:auto;align-self:center;font-size:13px;"></span>
   </div>
   <div id="feed-test-out" class="muted" style="margin-top:8px;font-size:13px;"></div>
+</div>
+
+<div class="card">
+  <h2>Duty-area wallboards <span class="muted" style="font-weight:400;font-size:13px;">— shareable read-only displays</span></h2>
+  <p class="card-sub">Open a live calls + faults board for a duty area on any remote
+    browser or wall display — no login needed. These read this server's own bridge
+    (for a standalone install with no controller). Anyone with a link can view that
+    board, so treat the links as secret; regenerating revokes every existing link.</p>
+  <div id="wall-list">Loading…</div>
+  <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
+    <button class="btn" id="wall-refresh">Refresh list</button>
+    <button class="btn danger" id="wall-regen" style="margin-left:auto;">Regenerate links (revoke old)</button>
+  </div>
+  <div id="wall-out" class="muted" style="margin-top:8px;font-size:13px;"></div>
 </div>
 {% endblock %}
 
@@ -324,6 +340,47 @@
   });
   loadFeed();
   setInterval(refreshFeedStatus, 5000);
+
+  // ---------- local duty-area wallboard links (standalone, no controller) ----
+  function _wesc(s){ const d=document.createElement("div"); d.textContent=s==null?"":s; return d.innerHTML; }
+  async function loadWall(){
+    const box=document.getElementById("wall-list"); if(!box) return; box.textContent="Loading…";
+    try{
+      const token=(await api("/api/wall/local")).token;
+      let duties=[]; try{ duties=(await api("/api/imt/calls")).duty_areas||[]; }catch(e){}
+      const base=window.location.origin+"/w/tel/"+token;
+      const rows=[["All duty areas",base]];
+      for(const d of duties) rows.push([d.name, base+"?area="+encodeURIComponent(d.string)]);
+      let h='<table class="list"><thead><tr><th>Board</th><th>Shareable link</th><th class="right">Actions</th></tr></thead><tbody>';
+      for(const [name,url] of rows){
+        h+='<tr><td style="font-weight:600;">'+_wesc(name)+'</td>'+
+          '<td class="mono" style="font-size:12px;word-break:break-all;">'+_wesc(url)+'</td>'+
+          '<td class="right" style="white-space:nowrap;">'+
+          '<a class="btn small" href="'+_wesc(url)+'" target="_blank" rel="noopener">Open</a> '+
+          '<button class="btn small wall-copy" data-url="'+_wesc(url)+'">Copy</button></td></tr>';
+      }
+      h+='</tbody></table>';
+      if(!duties.length) h+='<div class="f-help">No duty areas seen yet — the "All duty areas" '+
+        'board works now; per-area links appear once the bridge has reported its duty areas.</div>';
+      box.innerHTML=h;
+      box.querySelectorAll(".wall-copy").forEach(b=>b.addEventListener("click",async()=>{
+        try{ await navigator.clipboard.writeText(b.dataset.url); toast("Link copied"); }
+        catch(e){ toast("Copy failed — select the link manually",true); }
+      }));
+    }catch(e){ box.innerHTML='<span class="v-crit">'+_wesc(e.message)+'</span>'; }
+  }
+  const wr=document.getElementById("wall-refresh");
+  if(wr) wr.addEventListener("click", loadWall);
+  const wg=document.getElementById("wall-regen");
+  if(wg) wg.addEventListener("click", async()=>{
+    if(!confirm("Regenerate the wallboard links? Every existing link will stop working "+
+                "and any displays using them must be updated.")) return;
+    const out=document.getElementById("wall-out"); out.textContent="Regenerating…";
+    try{ await api("/api/wall/local/regenerate",{method:"POST",body:"{}"});
+      out.innerHTML='<span class="v-good">✓ New links issued. Old links now revoked.</span>'; loadWall(); }
+    catch(e){ out.innerHTML='<span class="v-crit">✗ '+e.message+'</span>'; }
+  });
+  loadWall();
 })();
 </script>
 {% endblock %}

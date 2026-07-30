@@ -1,5 +1,6 @@
 """Flask application: authenticated GUI + JSON API."""
 import functools
+import json
 import logging
 import os
 import re
@@ -122,6 +123,10 @@ def create_app():
         ctx["current_user"] = session.get("username")
         ctx["current_role"] = session.get("role", "standard")
         ctx["is_admin"] = session.get("role") == "admin"
+        # cache-buster for static assets: bump with the build so browsers always
+        # fetch the new JS/CSS after a deploy instead of serving a stale cache
+        from . import imtbridge as _ib
+        ctx["asset_ver"] = _ib.READER_VERSION
         return ctx
 
     from .agentapi import bp as agent_bp
@@ -421,6 +426,36 @@ def register_routes(app):
         return jsonify(ok=True, settings={
             "ping_interval": site.get("ping_interval"),
             "warn_ms": site.get("warn_ms"), "crit_ms": site.get("crit_ms")})
+
+    @app.route("/api/sites/<int:site_id>/wall")
+    @admin_required
+    def api_site_wall(site_id):
+        if not database.get_site(site_id):
+            return jsonify(error="not found"), 404
+        return jsonify(token=database.get_or_create_wall_token(site_id))
+
+    @app.route("/api/sites/<int:site_id>/wall/regenerate", methods=["POST"])
+    @admin_required
+    def api_site_wall_regen(site_id):
+        if not database.get_site(site_id):
+            return jsonify(error="not found"), 404
+        return jsonify(token=database.regenerate_wall_token(site_id))
+
+    @app.route("/api/wall/local")
+    @admin_required
+    def api_wall_local():
+        tok = settings.get("local_wall_token")
+        if not tok:
+            tok = secrets.token_urlsafe(24)
+            settings.set("local_wall_token", tok)
+        return jsonify(token=tok)
+
+    @app.route("/api/wall/local/regenerate", methods=["POST"])
+    @admin_required
+    def api_wall_local_regen():
+        tok = secrets.token_urlsafe(24)
+        settings.set("local_wall_token", tok)
+        return jsonify(token=tok)
 
     # ---------------- API: customers / sites ----------------
 
@@ -1300,6 +1335,62 @@ def register_routes(app):
                        recent=database.imt_list_recent_calls(scope, limit=100),
                        duty_areas=duties, counts=database.imt_call_counts(scope))
 
+    # ---- no-login Telligence duty-area wallboards (shared read-only links) ----
+
+    def _wall_payload(site_id, area):
+        """Active calls + faults for a site, each tagged with its duty area, and
+        filtered to one duty area when `area` (a duty-area location_string) is
+        given. Read-only; used by the tokenized kiosk endpoint."""
+        duties = database.imt_duty_areas(site_id)
+
+        def tag(items):
+            for it in items:
+                d = _duty_for(it.get("location_string"), duties)
+                it["duty"] = d
+                it["duty_string"] = d["string"] if d else None
+            return items
+
+        active = tag(database.imt_list_active_calls(site_id))
+        faults = tag([d for d in database.imt_list_devices(site_id)
+                      if d["status"] == "failed"])
+        if area:
+            active = [c for c in active if c.get("duty_string") == area]
+            faults = [f for f in faults if f.get("duty_string") == area]
+        area_name = next((d["name"] for d in duties if d["string"] == area), None)
+        return {"active": active, "faults": faults, "duty_areas": duties,
+                "area": area, "area_name": area_name, "now": time.time()}
+
+    def _resolve_wall(token):
+        """Map a wallboard token to (ok, scope, name). scope is a site id, or
+        None for this instance's own local bridge (standalone install)."""
+        site = database.site_by_wall_token(token)
+        if site:
+            return True, site["id"], site["name"]
+        if token and token == settings.get("local_wall_token"):
+            return True, None, "Telligence"   # local reader (no controller)
+        return False, None, None
+
+    @app.route("/w/tel/<token>")
+    def wall_tel_page(token):
+        ok, scope, name = _resolve_wall(token)
+        if not ok:
+            return ("This wallboard link is not valid. Ask an administrator for "
+                    "a current link.", 404)
+        return render_template(
+            "imt_wallboard.html", token=token, site_name=name,
+            area=request.args.get("area", ""),
+            refresh=settings.get("wallboard_refresh"),
+            theme=settings.get("default_theme"))
+
+    @app.route("/api/w/tel/<token>")
+    def api_wall_tel(token):
+        ok, scope, name = _resolve_wall(token)
+        if not ok:
+            return jsonify(error="invalid token"), 404
+        data = _wall_payload(scope, request.args.get("area", ""))
+        data["site_name"] = name
+        return jsonify(data)
+
     @app.route("/api/imt/fault-devices")
     @login_required
     def api_imt_fault_devices():
@@ -1328,6 +1419,12 @@ def register_routes(app):
         # a site — status derived from what the site's agent has pushed up
         site = database.get_site(scope)
         evs = database.imt_list_events(scope, limit=1)
+        agent_imt = None
+        if site and site.get("agent_diag"):
+            try:
+                agent_imt = json.loads(site["agent_diag"]).get("imt")
+            except (ValueError, TypeError):
+                agent_imt = None
         st = {
             "enabled": True,
             "configured": counts["total"] > 0,
@@ -1338,6 +1435,7 @@ def register_routes(app):
             "last_poll_ts": site.get("last_seen") if site else None,
             "remote": True,
             "agent_host": site.get("agent_host") if site else None,
+            "agent_imt": agent_imt,
         }
         return jsonify(status=st, counts=counts, scope="site")
 
@@ -1849,6 +1947,8 @@ def register_routes(app):
             kwargs["enabled"] = bool(data["enabled"])
         if "interval" in data:
             kwargs["interval"] = data["interval"]
+        if "insecure" in data:
+            kwargs["insecure"] = bool(data["insecure"])
         agentmod.save_conf(**kwargs)
         return jsonify(ok=True)
 
@@ -1864,8 +1964,9 @@ def register_routes(app):
             key = c["site_key"]
         if not hub or not key:
             return jsonify(ok=False, error="hub URL and site key required"), 400
+        insecure = bool(data["insecure"]) if "insecure" in data else c["insecure"]
         try:
-            r = agentmod.test_connection(hub, key)
+            r = agentmod.test_connection(hub, key, insecure=insecure)
             return jsonify(ok=True, **r)
         except Exception as e:
             return jsonify(ok=False, error=f"{type(e).__name__}: {e}"), 400

@@ -45,12 +45,12 @@ import tempfile
 import threading
 import time
 
-from . import database, settings
+from . import database, proc, settings
 
 log = logging.getLogger("pingmon.imt")
 
 SITE_ID = None   # this reader always represents the LOCAL bridge for this instance
-READER_VERSION = "2.15"  # bump on reader changes so the running build is identifiable
+READER_VERSION = "2.25"  # bump on reader changes so the running build is identifiable
 STATE_PATH = os.path.join(database.DATA_DIR, "imt_state.json")
 
 # A log line starts with "2026-02-11 15:08:31,039 ".
@@ -549,16 +549,74 @@ def read_bed_areas(config_db_path):
     return out
 
 
+_SERVICE_STATES = {1: "STOPPED", 2: "START_PENDING", 3: "STOP_PENDING",
+                   4: "RUNNING", 5: "CONTINUE_PENDING", 6: "PAUSE_PENDING",
+                   7: "PAUSED"}
+
+
+def _query_service_api(name):
+    """Service state straight from the Windows service control manager.
+
+    Used in preference to shelling out to ``sc``: launching a console program
+    from a windowed (``--noconsole``) build makes Windows allocate a console for
+    it, which flashes a cmd box on screen every time the health check runs. This
+    is an in-process API call — no child process, nothing to see, and faster."""
+    import ctypes
+    from ctypes import wintypes
+
+    class SERVICE_STATUS(ctypes.Structure):
+        _fields_ = [("dwServiceType", wintypes.DWORD),
+                    ("dwCurrentState", wintypes.DWORD),
+                    ("dwControlsAccepted", wintypes.DWORD),
+                    ("dwWin32ExitCode", wintypes.DWORD),
+                    ("dwServiceSpecificExitCode", wintypes.DWORD),
+                    ("dwCheckPoint", wintypes.DWORD),
+                    ("dwWaitHint", wintypes.DWORD)]
+
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    adv.OpenSCManagerW.restype = wintypes.HANDLE
+    adv.OpenSCManagerW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR,
+                                   wintypes.DWORD]
+    adv.OpenServiceW.restype = wintypes.HANDLE
+    adv.OpenServiceW.argtypes = [wintypes.HANDLE, wintypes.LPCWSTR,
+                                 wintypes.DWORD]
+    adv.QueryServiceStatus.argtypes = [wintypes.HANDLE,
+                                       ctypes.POINTER(SERVICE_STATUS)]
+    adv.CloseServiceHandle.argtypes = [wintypes.HANDLE]
+
+    scm = adv.OpenSCManagerW(None, None, 0x0001)      # SC_MANAGER_CONNECT
+    if not scm:
+        return None
+    try:
+        svc = adv.OpenServiceW(scm, name, 0x0004)     # SERVICE_QUERY_STATUS
+        if not svc:
+            return None                               # no such service
+        try:
+            st = SERVICE_STATUS()
+            if not adv.QueryServiceStatus(svc, ctypes.byref(st)):
+                return None
+            return _SERVICE_STATES.get(st.dwCurrentState, "UNKNOWN")
+        finally:
+            adv.CloseServiceHandle(svc)
+    finally:
+        adv.CloseServiceHandle(scm)
+
+
 def _query_service(name):
-    """Windows service state via ``sc query`` (authoritative). Returns RUNNING /
-    STOPPED / START_PENDING / STOP_PENDING / UNKNOWN, or None if it can't be
-    queried (not Windows, no such service, sc unavailable)."""
+    """Windows service state (authoritative). Returns RUNNING / STOPPED /
+    START_PENDING / STOP_PENDING / UNKNOWN, or None if it can't be queried
+    (not Windows, no such service). Never opens a console window."""
     if os.name != "nt" or not name:
         return None
+    try:
+        return _query_service_api(name)
+    except Exception:                       # pragma: no cover - API unavailable
+        pass
+    # fall back to sc, with its console window suppressed
     import subprocess
     try:
-        out = subprocess.run(["sc", "query", name], capture_output=True,
-                             text=True, timeout=5)
+        out = proc.run(["sc", "query", name], capture_output=True,
+                       text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
         return None
     t = (out.stdout or "").upper()
@@ -568,22 +626,125 @@ def _query_service(name):
     return "UNKNOWN" if out.returncode == 0 else None
 
 
+# The Ascom/Telligence IMT bridge runs as a Windows service (the log shows
+# ImtBridgeCore.ImtBridgeService). We try these exact names first, then fall back
+# to scanning all services for one whose name/display-name looks like the bridge.
+_KNOWN_SERVICES = ("ImtBridge", "ImtBridgeCore", "ImtBridgeService",
+                   "Ascom IMT Bridge", "AscomImtBridge")
+_SERVICE_HINTS = ("imtbridge", "imt bridge", "telligence", "dukane",
+                  "ascom")
+_svc_cache = {"name": None, "ts": 0.0}
+_svc_state_cache = {"name": None, "state": None, "ts": 0.0}
+
+
+def _scan_services_registry():
+    """Find a bridge-looking service by reading the service list out of the
+    registry. Every installed service has a key under
+    ``HKLM\\SYSTEM\\CurrentControlSet\\Services``, so this gives the same answer
+    as ``sc query`` without starting a child process."""
+    try:
+        import winreg
+    except ImportError:
+        return None
+    try:
+        root = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                              r"SYSTEM\CurrentControlSet\Services")
+    except OSError:
+        return None
+    hits = []
+    try:
+        i = 0
+        while True:
+            try:
+                name = winreg.EnumKey(root, i)
+            except OSError:
+                break                        # ran off the end
+            i += 1
+            text = name.lower()
+            try:                             # match the friendly name too
+                with winreg.OpenKey(root, name) as k:
+                    text += " " + str(winreg.QueryValueEx(k, "DisplayName")[0]).lower()
+            except OSError:
+                pass
+            rank = next((n for n, h in enumerate(_SERVICE_HINTS) if h in text), None)
+            if rank is not None:
+                hits.append((rank, name))
+    finally:
+        root.Close()
+    # _SERVICE_HINTS is ordered most- to least-specific, so the best match wins
+    # ("...ImtBridge..." beats a service that merely has "ascom" in its name).
+    return min(hits)[1] if hits else None
+
+
+def detect_bridge_service(ttl=300):
+    """Best-effort auto-detection of the bridge's Windows service name so the
+    health check works with no configuration. Cached (service names don't move).
+    Returns the service name, or None (not Windows / not found)."""
+    if os.name != "nt":
+        return None
+    now = time.time()
+    if _svc_cache["name"] and now - _svc_cache["ts"] < ttl:
+        return _svc_cache["name"]
+    if now - _svc_cache["ts"] < ttl and _svc_cache["ts"]:
+        return _svc_cache["name"]          # negative result cached too
+    found = None
+    for name in _KNOWN_SERVICES:           # 1) cheap: probe the likely names
+        if _query_service(name) is not None:
+            found = name
+            break
+    if not found:                          # 2) enumerate from the registry
+        found = _scan_services_registry()   #    (in-process, no console window)
+    if not found:                          # 3) last resort: enumerate via sc
+        import subprocess
+        try:
+            out = proc.run(["sc", "query", "type=", "service", "state=", "all"],
+                           capture_output=True, text=True, timeout=8)
+            cur = None
+            for line in (out.stdout or "").splitlines():
+                s = line.strip()
+                up = s.upper()
+                if up.startswith("SERVICE_NAME:"):
+                    cur = s.split(":", 1)[1].strip()
+                    if any(h in cur.lower() for h in _SERVICE_HINTS):
+                        found = cur
+                        break
+                elif up.startswith("DISPLAY_NAME:") and cur:
+                    if any(h in s.split(":", 1)[1].lower() for h in _SERVICE_HINTS):
+                        found = cur
+                        break
+        except (OSError, subprocess.SubprocessError):
+            pass
+    _svc_cache["name"] = found
+    _svc_cache["ts"] = now
+    return found
+
+
 def bridge_health(cfg, stale_secs, service_name=""):
     """Is the IMT bridge service actually working right now?
 
-    Prefers an authoritative Windows service query when a service name is set;
-    otherwise falls back to write-freshness — the bridge writes to its log (and
-    DB) continuously while running, so if neither file has changed for longer
-    than ``stale_secs`` the service is stopped or hung. Returns a dict with
-    status ok|failed, a human reason, the source used, and last-activity age."""
+    Checks the actual Windows service by default — the configured name if set,
+    otherwise an auto-detected one. Only when no service can be found (e.g. the
+    monitor runs on a different box from the bridge, or a non-Windows host) does
+    it fall back to write-freshness: the bridge writes to its log/DB continuously
+    while running, so if neither file has changed for longer than ``stale_secs``
+    the service is stopped or hung."""
     now = time.time()
-    if service_name:
-        state = _query_service(service_name)
+    name = (service_name or "").strip() or detect_bridge_service()
+    if name:
+        # The poll can run as often as once a second; a service starting or
+        # stopping is a once-in-a-blue-moon event, so a few seconds of cache
+        # costs nothing and keeps the check off the hot path.
+        c = _svc_state_cache
+        if c["name"] == name and now - c["ts"] < 5:
+            state = c["state"]
+        else:
+            state = _query_service(name)
+            c.update(name=name, state=state, ts=now)
         if state is not None:
             ok = state == "RUNNING"
             return {"status": "ok" if ok else "failed", "source": "service",
-                    "service_state": state,
-                    "reason": f"service '{service_name}' is {state}",
+                    "service": name, "service_state": state,
+                    "reason": f"service '{name}' is {state}",
                     "last_activity": now if ok else None,
                     "age": 0 if ok else None}
     times = []
@@ -605,7 +766,7 @@ def bridge_health(cfg, stale_secs, service_name=""):
                 "reason": f"no bridge activity for {int(age)}s "
                           f"(log/DB not written — service likely stopped)"}
     return {"status": "ok", "source": "files", "last_activity": last, "age": age,
-            "reason": f"active — last wrote {int(age)}s ago"}
+            "reason": f"writing (last {int(age)}s ago; no service found to query)"}
 
 
 def _load_state():

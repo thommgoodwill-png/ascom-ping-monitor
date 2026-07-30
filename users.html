@@ -177,6 +177,12 @@
     if (s.remote) {
       meta = (s.agent_host ? "agent " + s.agent_host : "site agent") +
              (s.last_poll_ts ? " · seen " + fmtAgo(s.last_poll_ts) : "");
+      const ai = s.agent_imt;
+      if (ai) {
+        meta += " · bridge: " + (ai.db_path_set ? "DB✓" : "DB✗") + " " +
+                (ai.log_path_set ? (ai.log_exists ? "log✓" : "log⚠") : "log✗") +
+                " · " + (ai.active_calls || 0) + " calls · " + (ai.faults || 0) + " faults";
+      }
     } else {
       const src = [];
       if (s.db_path) src.push("db " + s.db_path.split(/[\\/]/).pop());
@@ -196,7 +202,19 @@
     document.getElementById("imt-failed").textContent = c.failed;
     document.getElementById("imt-total").textContent = c.total;
     const err = document.getElementById("imt-err");
-    if (s.last_error) { err.textContent = s.last_error; err.style.display="block"; } else err.style.display="none";
+    const ai = s.agent_imt;
+    if (s.last_error) {
+      err.textContent = s.last_error; err.style.display = "block";
+    } else if (ai && ai.db_path_set && !ai.log_path_set) {
+      err.textContent = "This site's agent has the bridge database but no log file set — "
+        + "faults will show, but live CALLS won't come through because calls are only in "
+        + "the bridge log. Set the log path in the site agent's Telligence settings.";
+      err.style.display = "block";
+    } else if (ai && ai.log_path_set && !ai.log_exists) {
+      err.textContent = "This site's agent has a bridge log path set, but the file isn't "
+        + "found at that location — calls can't be read until the path is correct.";
+      err.style.display = "block";
+    } else { err.style.display = "none"; }
   }
 
   let lastCalls = null, dutyFilter = null;   // dutyFilter: null = All, else a duty string

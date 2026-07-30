@@ -8,7 +8,7 @@ import struct
 import subprocess
 import tempfile
 
-from . import database
+from . import database, proc
 
 ALLOWED_EXT = {"jpg", "jpeg", "png", "svg", "pdf"}
 STORE_EXT = {"jpg": "jpg", "jpeg": "jpg", "png": "png", "svg": "svg", "pdf": "png"}
@@ -79,7 +79,7 @@ def _convert_pdf(src_pdf, dst_png):
     if exe:
         base = dst_png[:-4] if dst_png.endswith(".png") else dst_png
         try:
-            subprocess.run([exe, "-png", "-singlefile", "-r", "150", src_pdf, base],
+            proc.run([exe, "-png", "-singlefile", "-r", "150", src_pdf, base],
                            check=True, timeout=60,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:

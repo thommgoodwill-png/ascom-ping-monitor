@@ -16,7 +16,7 @@ import subprocess
 import threading
 import time
 
-from . import database, settings
+from . import database, proc, settings
 
 IS_WINDOWS = platform.system() == "Windows"
 CAP_DIR = os.path.join(database.DATA_DIR, "captures")
@@ -42,7 +42,7 @@ def list_interfaces():
     if not exe:
         return []
     try:
-        out = subprocess.run([exe, "-D"], capture_output=True, text=True,
+        out = proc.run([exe, "-D"], capture_output=True, text=True,
                              timeout=10).stdout
     except (OSError, subprocess.TimeoutExpired):
         return []
@@ -89,7 +89,7 @@ class CaptureJob:
         if self.bpf:
             cmd += self.bpf.split()
         try:
-            self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+            self.proc = proc.popen(cmd, stdout=subprocess.DEVNULL,
                                          stderr=subprocess.PIPE, text=True)
         except OSError as e:
             self.state = "error"
@@ -139,7 +139,7 @@ def summarize_file(path, limit=1000):
         raise RuntimeError("tcpdump is not installed — cannot read pcap files")
     if not os.path.exists(path):
         raise FileNotFoundError(path)
-    out = subprocess.run([exe, "-nn", "-tttt", "-r", path],
+    out = proc.run([exe, "-nn", "-tttt", "-r", path],
                          capture_output=True, text=True, timeout=120).stdout
     lines = [l for l in out.splitlines() if l.strip()]
     rows = [_parse_line(l) for l in lines[:limit]]

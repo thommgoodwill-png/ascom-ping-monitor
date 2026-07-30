@@ -1,129 +1,179 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Wallboard — Ascom Network Monitor</title>
-<link rel="icon" href="{{ favicon_url }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-<script>
-  (function () {
-    var t = localStorage.getItem("pingmon-theme") || "{{ theme }}";
-    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
-  })();
-</script>
-<style>
-  body { padding: 18px; }
-  .wb-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 16px; }
-  .wb-head img { height: 24px; }
-  .wb-head .t { font-size: 15px; color: var(--muted); }
-  .wb-head .clock { margin-left: auto; font-size: 22px; font-weight: 600;
-                    font-variant-numeric: tabular-nums; }
-  .wb-grid { display: grid; gap: 14px;
-             grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
-  .tile { border-radius: 12px; padding: 16px 18px; border: 2px solid var(--border);
-          background: var(--surface); }
-  .tile .nm { font-weight: 700; font-size: 16px; }
-  .tile .hs { font-size: 11.5px; color: var(--muted); margin-bottom: 8px; }
-  .tile .lat { font-size: 40px; font-weight: 700; line-height: 1.1; }
-  .tile .lat .u { font-size: 15px; font-weight: 400; color: var(--muted); }
-  .tile .st { margin-top: 8px; }
-  .tile.s-up   { border-color: var(--good); }
-  .tile.s-warn { border-color: var(--warn); background:
-                 linear-gradient(var(--warn-wash), var(--warn-wash)), var(--surface); }
-  .tile.s-crit, .tile.s-down { border-color: var(--crit); background:
-                 linear-gradient(var(--crit-wash), var(--crit-wash)), var(--surface); }
-  .wb-foot { margin-top: 16px; font-size: 12px; color: var(--muted); }
-  .wb-foot a { color: var(--ink-2); }
-</style>
-</head>
-<body>
-<div class="wb-head">
-  <img src="{{ logo_url }}" alt="ascom">
-  <span class="t">NETWORK WALLBOARD</span>
-  <span class="mon-state" id="wb-maint" style="display:none;color:var(--warn-text);">🔧 maintenance window — alerts muted</span>
-  <span class="clock" id="wb-clock"></span>
+{% extends "base.html" %}
+{% block content %}
+{% include "_site_subnav.html" %}
+<h1 class="page-title" id="site-title">Site settings</h1>
+
+<div class="card">
+  <h2>Agent settings <span class="muted" style="font-weight:400;font-size:13px;">— defaults for this site's devices</span></h2>
+  <p class="card-sub">These apply to every device at this site that doesn't have its
+    own per-device override. Leave a field blank to inherit the controller global.
+    Changes reach the site's agent on its next sync — they only affect ping rate and
+    thresholds, so they can't disconnect the agent.</p>
+  <div class="f-row">
+    <div><label class="f-label">Ping interval (s)</label>
+      <input type="number" id="s_ping_interval" min="0.2" max="60" step="0.1"></div>
+    <div><label class="f-label">Warn threshold (ms)</label>
+      <input type="number" id="s_warn_ms" min="1" step="1"></div>
+    <div><label class="f-label">Crit threshold (ms)</label>
+      <input type="number" id="s_crit_ms" min="1" step="1"></div>
+  </div>
+  <div class="f-help" id="agent-globals"></div>
+  <div style="display:flex;gap:8px;margin-top:14px;">
+    <button class="btn primary" id="agent-save">Save</button>
+    <button class="btn" id="agent-reset" title="Clear all three back to the controller global">Reset to global</button>
+  </div>
+  <div id="agent-out" class="muted" style="margin-top:8px;font-size:13px;"></div>
 </div>
-<div class="wb-grid" id="wb-grid"></div>
-<div class="wb-foot">
-  Auto-refresh every {{ refresh }}s · press F11 for full screen ·
-  <a href="/">back to dashboard</a>
+
+<div class="card">
+  <h2>Duty-area wallboards <span class="muted" style="font-weight:400;font-size:13px;">— shareable read-only displays</span></h2>
+  <p class="card-sub">Open a live calls + faults board for a duty area on any remote
+    browser or wall display — no login needed. Anyone with a link can view that
+    board, so treat the links as secret. Regenerating the links revokes every
+    existing one.</p>
+  <div id="wall-list">Loading…</div>
+  <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
+    <button class="btn" id="wall-refresh">Refresh list</button>
+    <button class="btn danger" id="wall-regen" style="margin-left:auto;">Regenerate links (revoke old)</button>
+  </div>
+  <div id="wall-out" class="muted" style="margin-top:8px;font-size:13px;"></div>
 </div>
-<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+
+<div class="card">
+  <h2>Stored data</h2>
+  <p class="card-sub">Clear the stored ping history, events and the failed-ping
+    tallies for every device at this site. The devices themselves are kept — only
+    their recorded data is wiped, and it starts filling again on the next ping.</p>
+
+  <div id="clear-summary" class="muted" style="font-size:13px;margin-bottom:12px;"></div>
+
+  <button class="btn danger" id="clear-btn">Clear stored data for this site</button>
+  <div id="clear-out" class="muted" style="margin-top:10px;font-size:13px;"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
 <script>
 (function () {
   "use strict";
-  function tick() {
-    document.getElementById("wb-clock").textContent =
-      new Date().toLocaleTimeString();
-  }
-  setInterval(tick, 1000); tick();
+  const SID = {{ site_id }};
 
-  function stateOf(d) {
-    if (!d.enabled) return ["", "○ Disabled", "unknown"];
-    if (d.state === "down") return ["s-down", "✖ DOWN", "down"];
-    if (d.in_loss) return ["s-warn", "▲ PACKET LOSS", "warn"];
-    if (d.state === "up") {
-      if (d.last_latency != null && d.last_latency > d.eff_crit) return ["s-crit", "■ SLOW", "crit"];
-      if (d.last_latency != null && d.last_latency > d.eff_warn) return ["s-warn", "▲ WARN", "warn"];
-      return ["s-up", "● UP", "up"];
+  // ---- per-site agent settings ----
+  const AF = ["ping_interval", "warn_ms", "crit_ms"];
+  const AID = { ping_interval: "s_ping_interval", warn_ms: "s_warn_ms", crit_ms: "s_crit_ms" };
+  async function loadAgent() {
+    let site = {}, g = {};
+    try { site = (await api("/api/sites/" + SID)).site || {}; } catch (e) {}
+    try { g = (await api("/api/settings")).settings || {}; } catch (e) {}
+    for (const f of AF) {
+      const el = document.getElementById(AID[f]);
+      if (el) el.value = site[f] == null ? "" : site[f];
     }
-    return ["", "… waiting", "unknown"];
+    document.getElementById("agent-globals").textContent =
+      "Controller global: ping " + (g.ping_interval != null ? g.ping_interval + "s" : "—")
+      + " · warn " + (g.warn_ms != null ? g.warn_ms + "ms" : "—")
+      + " · crit " + (g.crit_ms != null ? g.crit_ms + "ms" : "—")
+      + ". Blank fields use these.";
+  }
+  function gatherAgent() {
+    const body = {};
+    for (const f of AF) {
+      const el = document.getElementById(AID[f]);
+      body[f] = el && el.value.trim() !== "" ? el.value.trim() : null;
+    }
+    return body;
+  }
+  async function saveAgent(body) {
+    const out = document.getElementById("agent-out"); out.textContent = "Saving…";
+    try {
+      await api("/api/sites/" + SID + "/settings", { method: "POST", body: JSON.stringify(body) });
+      out.innerHTML = '<span class="v-good">✓ Saved. The agent applies it on its next sync.</span>';
+      loadAgent();
+    } catch (e) { out.innerHTML = '<span class="v-crit">✗ ' + e.message + '</span>'; }
+  }
+  document.getElementById("agent-save").addEventListener("click", () => saveAgent(gatherAgent()));
+  document.getElementById("agent-reset").addEventListener("click", () => {
+    if (!confirm("Clear this site's ping interval and thresholds back to the controller global?")) return;
+    saveAgent({ ping_interval: null, warn_ms: null, crit_ms: null });
+  });
+  loadAgent();
+
+  // ---- duty-area wallboard links ----
+  function esc(s){ const d=document.createElement("div"); d.textContent=s==null?"":s; return d.innerHTML; }
+  async function loadWall() {
+    const box = document.getElementById("wall-list");
+    box.textContent = "Loading…";
+    try {
+      const w = await api("/api/sites/" + SID + "/wall");
+      const token = w.token;
+      let duties = [];
+      try { duties = (await api("/api/imt/calls?site=" + SID)).duty_areas || []; } catch (e) {}
+      const origin = window.location.origin;
+      const base = origin + "/w/tel/" + token;
+      const rows = [["All duty areas", base]];
+      for (const d of duties) rows.push([d.name, base + "?area=" + encodeURIComponent(d.string)]);
+      let h = '<table class="list"><thead><tr><th>Board</th><th>Shareable link</th><th class="right">Actions</th></tr></thead><tbody>';
+      for (const [name, url] of rows) {
+        h += '<tr><td style="font-weight:600;">' + esc(name) + '</td>' +
+          '<td class="mono" style="font-size:12px;word-break:break-all;">' + esc(url) + '</td>' +
+          '<td class="right" style="white-space:nowrap;">' +
+          '<a class="btn small" href="' + esc(url) + '" target="_blank" rel="noopener">Open</a> ' +
+          '<button class="btn small wall-copy" data-url="' + esc(url) + '">Copy</button></td></tr>';
+      }
+      h += '</tbody></table>';
+      if (!duties.length) h += '<div class="f-help">No duty areas seen yet for this site — ' +
+        'the "All duty areas" board works now; per-area links appear once the site\'s ' +
+        'bridge has reported its duty areas.</div>';
+      box.innerHTML = h;
+      box.querySelectorAll(".wall-copy").forEach(b => b.addEventListener("click", async () => {
+        try { await navigator.clipboard.writeText(b.dataset.url); toast("Link copied"); }
+        catch (e) { toast("Copy failed — select the link manually", true); }
+      }));
+    } catch (e) { box.innerHTML = '<span class="v-crit">' + esc(e.message) + '</span>'; }
+  }
+  document.getElementById("wall-refresh").addEventListener("click", loadWall);
+  document.getElementById("wall-regen").addEventListener("click", async () => {
+    if (!confirm("Regenerate the wallboard links? Every existing link for this site " +
+                 "will stop working and any displays using them must be updated.")) return;
+    const out = document.getElementById("wall-out"); out.textContent = "Regenerating…";
+    try {
+      await api("/api/sites/" + SID + "/wall/regenerate", { method: "POST", body: "{}" });
+      out.innerHTML = '<span class="v-good">✓ New links issued. Old links now revoked.</span>';
+      loadWall();
+    } catch (e) { out.innerHTML = '<span class="v-crit">✗ ' + e.message + '</span>'; }
+  });
+  loadWall();
+
+  async function loadSummary() {
+    try {
+      const d = await api("/api/sites/" + SID);
+      document.getElementById("site-title").textContent = d.site.name + " · settings";
+      let totalFails = 0;
+      for (const dev of d.devices) totalFails += (dev.fail_total || 0);
+      document.getElementById("clear-summary").textContent =
+        d.devices.length + " device(s) at this site · "
+        + totalFails + " failed ping event(s) tallied.";
+    } catch (e) {}
   }
 
-  async function refresh() {
+  document.getElementById("clear-btn").addEventListener("click", async () => {
+    if (!confirm("Clear ALL stored ping history, events and failed-ping tallies "
+                 + "for this site? The devices are kept; this cannot be undone.")) return;
+    const out = document.getElementById("clear-out");
+    out.textContent = "Clearing…";
     try {
-      const data = await api("/api/devices");
-      document.getElementById("wb-maint").style.display =
-        data.in_maintenance ? "inline" : "none";
-      const grid = document.getElementById("wb-grid");
-      grid.innerHTML = "";
-      for (const d of data.devices) {
-        const [cls, label, pillCls] = stateOf(d);
-        const tile = document.createElement("div");
-        tile.className = "tile " + cls;
-        const nm = document.createElement("div");
-        nm.className = "nm"; nm.textContent = d.name;
-        const hs = document.createElement("div");
-        hs.className = "hs";
-        hs.textContent = d.host + (d.mac ? " · " + d.mac : "");
-        const lat = document.createElement("div");
-        lat.className = "lat";
-        if (d.state === "down") {
-          lat.textContent = "DOWN";
-          lat.style.color = "var(--crit-text)";
-        } else if (d.last_latency != null) {
-          lat.innerHTML = "";
-          lat.appendChild(document.createTextNode(d.last_latency.toFixed(1)));
-          const u = document.createElement("span");
-          u.className = "u"; u.textContent = " ms";
-          lat.appendChild(u);
-          lat.style.color = d.last_latency > d.eff_crit ? "var(--crit-text)"
-            : d.last_latency > d.eff_warn ? "var(--warn-text)" : "var(--ink)";
-        } else {
-          lat.textContent = "—";
-        }
-        const st = document.createElement("div");
-        st.className = "st";
-        const pill = document.createElement("span");
-        pill.className = "pill " + pillCls;
-        pill.textContent = label;
-        st.appendChild(pill);
-        if (d.hour_loss != null && d.hour_loss > 0) {
-          const l = document.createElement("span");
-          l.className = "hs";
-          l.style.marginLeft = "8px";
-          l.textContent = d.hour_loss.toFixed(1) + "% loss (1h)";
-          st.appendChild(l);
-        }
-        tile.append(nm, hs, lat, st);
-        grid.appendChild(tile);
-      }
-    } catch (e) { /* keep last render on transient errors */ }
-  }
-  refresh();
-  setInterval(refresh, {{ refresh }} * 1000);
+      const r = await api("/api/sites/" + SID + "/clear", { method: "POST", body: "{}" });
+      const c = r.cleared || {};
+      out.innerHTML = '<span class="v-good">✓ Cleared '
+        + (c.pings || 0) + ' ping row(s) and ' + (c.events || 0)
+        + ' event(s) across ' + (c.devices || 0) + ' device(s). Tallies reset.</span>';
+      loadSummary();
+    } catch (e) {
+      out.innerHTML = '<span class="v-crit">✗ ' + e.message + '</span>';
+    }
+  });
+
+  loadSummary();
 })();
 </script>
-</body>
-</html>
+{% endblock %}

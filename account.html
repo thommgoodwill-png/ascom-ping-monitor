@@ -1,497 +1,129 @@
-{% extends "base.html" %}
-{% block content %}
-{% if site_id %}{% include "_site_subnav.html" %}{% endif %}
-<h1 class="page-title">Heatmap{% if site_id %} — {{ site.name }}{% endif %}</h1>
-
-<div class="filter-row" style="margin-bottom:12px;">
-  <div class="range-group" id="hm-mode">
-    <button class="range-btn active" data-mode="grid">Time-of-day grid</button>
-    <button class="range-btn" data-mode="floor">Floor plan</button>
-  </div>
-</div>
-
-<!-- ===================== TIME-OF-DAY GRID ===================== -->
-<div id="grid-view">
-<div class="card">
-  <h2>Find recurring patterns</h2>
-  <p class="card-sub">Each cell is one hour of one day. Dark cells are worse.
-    Recurring problems — nightly backups, morning congestion, a flaky lift shaft AP —
-    show up as dark columns or rows. Hover any cell for exact numbers.</p>
-  <div class="filter-row" style="margin-bottom:12px;">
-    <select id="hm-device" style="width:auto;"></select>
-    <div class="range-group" id="hm-metric">
-      <button class="range-btn active" data-m="2">Avg latency</button>
-      <button class="range-btn" data-m="3">Max latency</button>
-      <button class="range-btn" data-m="4">Loss %</button>
-      <button class="range-btn" data-m="5">Jitter</button>
-    </div>
-    <div class="range-group" id="hm-days">
-      <button class="range-btn active" data-d="7">7 d</button>
-      <button class="range-btn" data-d="14">14 d</button>
-      <button class="range-btn" data-d="30">30 d</button>
-    </div>
-    <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-2);">
-      <input type="checkbox" id="hm-values"> show values
-    </label>
-  </div>
-  <div id="hm-box" style="overflow-x:auto;"></div>
-  <div id="hm-legend" style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:11.5px;color:var(--muted);"></div>
-</div>
-</div>
-
-<!-- ===================== FLOOR PLAN ===================== -->
-<div id="floor-view" style="display:none;">
-<div class="card">
-  <div class="filter-row" style="justify-content:space-between;flex-wrap:wrap;gap:10px;">
-    <div class="range-group" id="fp-window">
-      <button class="range-btn active" data-sec="0">Live</button>
-      <button class="range-btn" data-sec="86400">24 h</button>
-      <button class="range-btn" data-sec="604800">7 d</button>
-      <button class="range-btn" data-sec="2592000">30 d</button>
-      <button class="range-btn" data-hist="1">History</button>
-    </div>
-    <button class="btn small" id="fp-edit-btn">✎ Edit layout</button>
-  </div>
-
-  <!-- history scrubber -->
-  <div id="fp-hist-bar" style="display:none;margin-top:12px;">
-    <div style="display:flex;align-items:center;gap:12px;">
-      <span class="muted" style="font-size:12px;">Window</span>
-      <div class="range-group" id="fp-hist-window">
-        <button class="range-btn" data-sec="86400">24 h</button>
-        <button class="range-btn active" data-sec="604800">7 d</button>
-        <button class="range-btn" data-sec="2592000">30 d</button>
-      </div>
-      <input type="range" id="fp-hist-slider" min="0" max="1000" value="1000" style="flex:1;">
-      <span class="mono" id="fp-hist-time" style="font-size:12px;white-space:nowrap;">now</span>
-    </div>
-  </div>
-
-  <!-- edit toolbar -->
-  <div id="fp-edit-bar" style="display:none;margin-top:12px;padding:12px;background:var(--surface-2);border-radius:8px;">
-    <div class="f-row" style="align-items:flex-end;">
-      <div><label class="f-label">Add a floor plan (JPG, PNG, SVG or PDF)</label>
-        <input type="file" id="fp-file" accept=".jpg,.jpeg,.png,.svg,.pdf,image/*,application/pdf"></div>
-      <div><label class="f-label">Name</label><input type="text" id="fp-name" placeholder="Ground floor"></div>
-      <div style="display:flex;align-items:flex-end;"><button class="btn primary" id="fp-upload">⬆ Upload</button></div>
-    </div>
-    <div style="margin-top:10px;font-size:12.5px;color:var(--ink-2);">
-      <b>Place devices:</b> click a device below, then click where it sits on a plan.
-      Drag an existing marker to move it; click ✕ on a marker to remove it.
-    </div>
-    <div id="fp-palette" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;"></div>
-  </div>
-
-  <div id="fp-plans" style="margin-top:14px;display:flex;flex-direction:column;gap:22px;"></div>
-  <div id="fp-empty" class="muted" style="display:none;padding:24px 0;">
-    No floor plans yet. Click <b>Edit layout</b> to upload one and place your devices on it.
-  </div>
-
-  <div id="fp-legend" style="display:flex;align-items:center;gap:16px;margin-top:14px;font-size:12px;color:var(--muted);flex-wrap:wrap;">
-    <span><span class="fp-dot state-up" style="position:static;display:inline-block;vertical-align:middle;"></span> Online</span>
-    <span><span class="fp-dot state-down fp-throb" style="position:static;display:inline-block;vertical-align:middle;"></span> Offline</span>
-    <span><span class="fp-dot state-unknown" style="position:static;display:inline-block;vertical-align:middle;"></span> No data</span>
-    <span>🔴 Deeper red = more drops (problem areas)</span>
-  </div>
-</div>
-</div>
-
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wallboard — Ascom Network Monitor</title>
+<link rel="icon" href="{{ favicon_url }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script>
+  (function () {
+    var t = localStorage.getItem("pingmon-theme") || "{{ theme }}";
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
 <style>
-.fp-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:10px; width:100%; }
-.fp-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
-.fp-head .name { font-weight:600; }
-.fp-stage { position:relative; display:block; width:100%; line-height:0; border-radius:6px; overflow:hidden; }
-.fp-stage img { display:block; width:100%; height:auto; max-width:none; }
-.fp-stage canvas.fp-heat { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
-.fp-pin { position:absolute; transform:translate(-50%,-50%); z-index:3; }
-.fp-dot { width:16px; height:16px; border-radius:50%; border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.5); cursor:default; }
-.fp-dot.state-up { background:#22c55e; }
-.fp-dot.state-down { background:#ef4444; }
-.fp-dot.state-unknown { background:#9ca3af; }
-.fp-editing .fp-dot { cursor:grab; }
-.fp-throb { animation: fp-throb 1.1s ease-in-out infinite; }
-@keyframes fp-throb {
-  0%,100% { box-shadow:0 0 0 0 rgba(239,68,68,.7); }
-  50%     { box-shadow:0 0 0 10px rgba(239,68,68,0); }
-}
-.fp-pin .fp-x { position:absolute; top:-9px; right:-9px; width:16px; height:16px; border-radius:50%;
-  background:#111; color:#fff; font-size:11px; line-height:16px; text-align:center; cursor:pointer;
-  display:none; z-index:4; }
-.fp-editing .fp-pin .fp-x { display:block; }
-/* always-visible device name under each marker */
-.fp-pin .fp-name-tag { position:absolute; left:50%; top:18px; transform:translateX(-50%); white-space:nowrap;
-  font-size:13px; font-weight:600; color:#fff; background:rgba(17,17,17,.80); padding:2px 8px; border-radius:6px;
-  pointer-events:none; box-shadow:0 1px 4px rgba(0,0,0,.45); z-index:3; }
-/* larger, readable hover tooltip above the marker */
-.fp-pin .fp-label { position:absolute; left:50%; bottom:20px; transform:translateX(-50%); white-space:nowrap;
-  font-size:14px; line-height:1.35; background:rgba(0,0,0,.88); color:#fff; padding:6px 11px; border-radius:7px;
-  opacity:0; transition:opacity .12s; pointer-events:none; box-shadow:0 3px 10px rgba(0,0,0,.55); z-index:6; }
-.fp-pin:hover .fp-label { opacity:1; }
-.fp-stage.placing { cursor:crosshair; }
-.fp-chip { cursor:pointer; }
-.fp-chip.armed { outline:2px solid var(--s1); }
-.fp-chip.placed { opacity:.45; }
+  body { padding: 18px; }
+  .wb-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 16px; }
+  .wb-head img { height: 24px; }
+  .wb-head .t { font-size: 15px; color: var(--muted); }
+  .wb-head .clock { margin-left: auto; font-size: 22px; font-weight: 600;
+                    font-variant-numeric: tabular-nums; }
+  .wb-grid { display: grid; gap: 14px;
+             grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+  .tile { border-radius: 12px; padding: 16px 18px; border: 2px solid var(--border);
+          background: var(--surface); }
+  .tile .nm { font-weight: 700; font-size: 16px; }
+  .tile .hs { font-size: 11.5px; color: var(--muted); margin-bottom: 8px; }
+  .tile .lat { font-size: 40px; font-weight: 700; line-height: 1.1; }
+  .tile .lat .u { font-size: 15px; font-weight: 400; color: var(--muted); }
+  .tile .st { margin-top: 8px; }
+  .tile.s-up   { border-color: var(--good); }
+  .tile.s-warn { border-color: var(--warn); background:
+                 linear-gradient(var(--warn-wash), var(--warn-wash)), var(--surface); }
+  .tile.s-crit, .tile.s-down { border-color: var(--crit); background:
+                 linear-gradient(var(--crit-wash), var(--crit-wash)), var(--surface); }
+  .wb-foot { margin-top: 16px; font-size: 12px; color: var(--muted); }
+  .wb-foot a { color: var(--ink-2); }
 </style>
-{% endblock %}
-
-{% block scripts %}
+</head>
+<body>
+<div class="wb-head">
+  <img src="{{ logo_url }}" alt="ascom">
+  <span class="t">NETWORK WALLBOARD</span>
+  <span class="mon-state" id="wb-maint" style="display:none;color:var(--warn-text);">🔧 maintenance window — alerts muted</span>
+  <span class="clock" id="wb-clock"></span>
+</div>
+<div class="wb-grid" id="wb-grid"></div>
+<div class="wb-foot">
+  Auto-refresh every {{ refresh }}s · press F11 for full screen ·
+  <a href="/">back to dashboard</a>
+</div>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
 <script>
 (function () {
   "use strict";
-  const SITE = {{ site_id or 0 }};
-  const SITEQ = SITE ? "&site=" + SITE : "";
-  const SITEQ1 = SITE ? "?site=" + SITE : "";
+  function tick() {
+    document.getElementById("wb-clock").textContent =
+      new Date().toLocaleTimeString();
+  }
+  setInterval(tick, 1000); tick();
 
-  /* ===================== mode toggle ===================== */
-  let gridStarted = false, floorStarted = false;
-  document.getElementById("hm-mode").addEventListener("click", ev => {
-    const b = ev.target.closest(".range-btn"); if (!b) return;
-    document.querySelectorAll("#hm-mode .range-btn").forEach(x => x.classList.remove("active"));
-    b.classList.add("active");
-    const floor = b.dataset.mode === "floor";
-    document.getElementById("grid-view").style.display = floor ? "none" : "";
-    document.getElementById("floor-view").style.display = floor ? "" : "none";
-    if (floor && !floorStarted) { floorStarted = true; Floor.init(); }
-    if (!floor && !gridStarted) { gridStarted = true; Grid.init(); }
-  });
+  function stateOf(d) {
+    if (!d.enabled) return ["", "○ Disabled", "unknown"];
+    if (d.state === "down") return ["s-down", "✖ DOWN", "down"];
+    if (d.in_loss) return ["s-warn", "▲ PACKET LOSS", "warn"];
+    if (d.state === "up") {
+      if (d.last_latency != null && d.last_latency > d.eff_crit) return ["s-crit", "■ SLOW", "crit"];
+      if (d.last_latency != null && d.last_latency > d.eff_warn) return ["s-warn", "▲ WARN", "warn"];
+      return ["s-up", "● UP", "up"];
+    }
+    return ["", "… waiting", "unknown"];
+  }
 
-  /* ===================== time-of-day grid ===================== */
-  const Grid = (function () {
-    const RAMP = ["#cde2fb","#b7d3f6","#9ec5f4","#86b6ef","#6da7ec","#5598e7",
-                  "#3987e5","#2a78d6","#256abf","#1c5cab","#184f95","#104281","#0d366b"];
-    let metric = 2, days = 7, deviceId = null, showValues = false;
-    const UNITS = {2:" ms",3:" ms",4:" %",5:" ms"};
-    const NAMES = {2:"avg latency",3:"max latency",4:"loss",5:"jitter"};
-    async function loadDevices() {
-      const data = SITE ? await api("/api/sites/" + SITE) : await api("/api/devices");
-      const sel = document.getElementById("hm-device"); sel.innerHTML = "";
+  async function refresh() {
+    try {
+      const data = await api("/api/devices");
+      document.getElementById("wb-maint").style.display =
+        data.in_maintenance ? "inline" : "none";
+      const grid = document.getElementById("wb-grid");
+      grid.innerHTML = "";
       for (const d of data.devices) {
-        const o = document.createElement("option");
-        o.value = d.id; o.textContent = d.name + " (" + d.host + ")"; sel.appendChild(o);
+        const [cls, label, pillCls] = stateOf(d);
+        const tile = document.createElement("div");
+        tile.className = "tile " + cls;
+        const nm = document.createElement("div");
+        nm.className = "nm"; nm.textContent = d.name;
+        const hs = document.createElement("div");
+        hs.className = "hs";
+        hs.textContent = d.host + (d.mac ? " · " + d.mac : "");
+        const lat = document.createElement("div");
+        lat.className = "lat";
+        if (d.state === "down") {
+          lat.textContent = "DOWN";
+          lat.style.color = "var(--crit-text)";
+        } else if (d.last_latency != null) {
+          lat.innerHTML = "";
+          lat.appendChild(document.createTextNode(d.last_latency.toFixed(1)));
+          const u = document.createElement("span");
+          u.className = "u"; u.textContent = " ms";
+          lat.appendChild(u);
+          lat.style.color = d.last_latency > d.eff_crit ? "var(--crit-text)"
+            : d.last_latency > d.eff_warn ? "var(--warn-text)" : "var(--ink)";
+        } else {
+          lat.textContent = "—";
+        }
+        const st = document.createElement("div");
+        st.className = "st";
+        const pill = document.createElement("span");
+        pill.className = "pill " + pillCls;
+        pill.textContent = label;
+        st.appendChild(pill);
+        if (d.hour_loss != null && d.hour_loss > 0) {
+          const l = document.createElement("span");
+          l.className = "hs";
+          l.style.marginLeft = "8px";
+          l.textContent = d.hour_loss.toFixed(1) + "% loss (1h)";
+          st.appendChild(l);
+        }
+        tile.append(nm, hs, lat, st);
+        grid.appendChild(tile);
       }
-      if (data.devices.length) { deviceId = data.devices[0].id; sel.value = deviceId; }
-    }
-    async function draw() {
-      if (deviceId == null) { document.getElementById("hm-box").innerHTML =
-        '<p class="muted">Add a device first.</p>'; return; }
-      const data = await api("/api/heatmap?device=" + deviceId + "&days=" + days);
-      const cells = {}; const dates = new Set(); let maxV = 0;
-      for (const c of data.cells) { cells[c[0]+"|"+c[1]] = c; dates.add(c[0]);
-        const v = c[metric]; if (v != null && v > maxV) maxV = v; }
-      if (maxV <= 0) maxV = 1;
-      const dateList = Array.from(dates).sort();
-      const box = document.getElementById("hm-box"); box.innerHTML = "";
-      const tbl = document.createElement("table");
-      tbl.style.borderCollapse = "separate"; tbl.style.borderSpacing = "2px";
-      const hr = document.createElement("tr"); hr.appendChild(document.createElement("th"));
-      for (let h=0;h<24;h++){ const th=document.createElement("th"); th.textContent=h;
-        th.style.cssText="font-size:10px;color:var(--muted);font-weight:400;padding:0 2px;"; hr.appendChild(th);}
-      tbl.appendChild(hr);
-      for (const d of dateList) {
-        const tr=document.createElement("tr"); const lab=document.createElement("td");
-        lab.textContent=d; lab.style.cssText="font-size:11px;color:var(--ink-2);padding-right:6px;white-space:nowrap;font-variant-numeric:tabular-nums;";
-        tr.appendChild(lab);
-        for (let h=0;h<24;h++){ const td=document.createElement("td"); const c=cells[d+"|"+h];
-          const v=c?c[metric]:null;
-          td.style.cssText="width:30px;height:22px;border-radius:3px;text-align:center;font-size:9.5px;";
-          if (v==null){ td.style.background="var(--surface-2)"; td.title=d+" "+h+":00 — no data"; }
-          else { const idx=Math.min(RAMP.length-1,Math.floor((v/maxV)*(RAMP.length-1)));
-            td.style.background=RAMP[idx];
-            td.title=d+" "+String(h).padStart(2,"0")+":00 — "+NAMES[metric]+" "+v+UNITS[metric]
-              +" · avg "+(c[2]??"—")+" ms · max "+(c[3]??"—")+" ms · loss "+c[4]+"% · jitter "+(c[5]??"—")+" ms · "+c[6]+" pings";
-            if (showValues){ td.textContent=Math.round(v); td.style.color=idx>6?"#fff":"#0b0b0b"; } }
-          tr.appendChild(td); }
-        tbl.appendChild(tr);
-      }
-      box.appendChild(tbl);
-      const leg=document.getElementById("hm-legend"); leg.innerHTML="";
-      const t1=document.createElement("span"); t1.textContent="0"+UNITS[metric]; leg.appendChild(t1);
-      const grad=document.createElement("span");
-      grad.style.cssText="display:inline-block;width:140px;height:10px;border-radius:5px;background:linear-gradient(to right,"+RAMP[0]+","+RAMP[6]+","+RAMP[12]+");";
-      leg.appendChild(grad);
-      const t2=document.createElement("span");
-      t2.textContent=(Math.round(maxV*10)/10)+UNITS[metric]+" (worst "+NAMES[metric]+")"; leg.appendChild(t2);
-    }
-    function init() {
-      document.getElementById("hm-device").addEventListener("change", ev=>{
-        deviceId=parseInt(ev.target.value,10); draw().catch(e=>toast(e.message,true)); });
-      document.getElementById("hm-metric").addEventListener("click", ev=>{
-        const b=ev.target.closest(".range-btn"); if(!b)return;
-        document.querySelectorAll("#hm-metric .range-btn").forEach(x=>x.classList.remove("active"));
-        b.classList.add("active"); metric=parseInt(b.dataset.m,10); draw().catch(e=>toast(e.message,true)); });
-      document.getElementById("hm-days").addEventListener("click", ev=>{
-        const b=ev.target.closest(".range-btn"); if(!b)return;
-        document.querySelectorAll("#hm-days .range-btn").forEach(x=>x.classList.remove("active"));
-        b.classList.add("active"); days=parseInt(b.dataset.d,10); draw().catch(e=>toast(e.message,true)); });
-      document.getElementById("hm-values").addEventListener("change", ev=>{
-        showValues=ev.target.checked; draw().catch(e=>toast(e.message,true)); });
-      loadDevices().then(draw).catch(e=>toast(e.message,true));
-    }
-    return { init };
-  })();
-
-  /* ===================== floor plan ===================== */
-  const Floor = (function () {
-    let plans = [], devices = [], windowSec = 0, editing = false;
-    let armedDevice = null, histMode = false, histWindow = 604800;
-    let timeline = null, pollTimer = null;
-
-    const $ = id => document.getElementById(id);
-
-    async function loadPlans() {
-      const d = await api("/api/floorplans" + SITEQ1);
-      plans = d.floorplans; devices = d.devices;
-      render();
-    }
-
-    function placedSet() {
-      const s = new Set();
-      for (const p of plans) for (const pin of p.pins) s.add(pin.device_id);
-      return s;
-    }
-
-    function render() {
-      const box = $("fp-plans"); box.innerHTML = "";
-      $("fp-empty").style.display = plans.length ? "none" : "block";
-      for (const p of plans) box.appendChild(planCard(p));
-      renderPalette();
-      box.classList.toggle("fp-editing", editing);
-      applyStatus();   // colour pins with whatever we last knew
-      refreshStatus(); // and fetch fresh
-    }
-
-    function planCard(p) {
-      const card = document.createElement("div"); card.className = "fp-card";
-      const head = document.createElement("div"); head.className = "fp-head";
-      const nm = document.createElement("span"); nm.className = "name"; nm.textContent = p.name;
-      head.appendChild(nm);
-      if (editing) {
-        const tools = document.createElement("span");
-        const ren = document.createElement("button"); ren.className="btn small"; ren.textContent="Rename";
-        ren.onclick = async () => { const n=prompt("Floor plan name:", p.name); if(!n)return;
-          await api("/api/floorplans/"+p.id,{method:"PUT",body:JSON.stringify({name:n})}); loadPlans(); };
-        const del = document.createElement("button"); del.className="btn small danger"; del.style.marginLeft="4px"; del.textContent="Delete";
-        del.onclick = async () => { if(!confirm("Delete floor plan \""+p.name+"\"?"))return;
-          await api("/api/floorplans/"+p.id,{method:"DELETE"}); loadPlans(); };
-        tools.append(ren, del); head.appendChild(tools);
-      }
-      card.appendChild(head);
-
-      const stage = document.createElement("div"); stage.className = "fp-stage"; stage.dataset.fp = p.id;
-      const img = document.createElement("img"); img.src = "/floorplan/"+p.id+"/image";
-      img.alt = p.name; img.draggable = false;
-      const heat = document.createElement("canvas"); heat.className = "fp-heat";
-      stage.append(img, heat);
-      img.onload = () => { heat.width = stage.clientWidth; heat.height = stage.clientHeight; drawHeat(p, heat); };
-
-      for (const pin of p.pins) stage.appendChild(pinEl(p, pin, stage));
-
-      // placement click
-      stage.addEventListener("click", ev => {
-        if (!editing || !armedDevice) return;
-        if (ev.target.closest(".fp-pin")) return;
-        const r = stage.getBoundingClientRect();
-        const x = (ev.clientX - r.left) / r.width, y = (ev.clientY - r.top) / r.height;
-        placePin(p.id, armedDevice, x, y);
-      });
-      card.appendChild(stage);
-      return card;
-    }
-
-    function pinEl(p, pin, stage) {
-      const el = document.createElement("div"); el.className = "fp-pin";
-      el.style.left = (pin.x*100)+"%"; el.style.top = (pin.y*100)+"%";
-      el.dataset.dev = pin.device_id;
-      const dot = document.createElement("div"); dot.className = "fp-dot state-unknown";
-      const nameTag = document.createElement("div"); nameTag.className = "fp-name-tag";
-      nameTag.textContent = pin.name;
-      const label = document.createElement("div"); label.className = "fp-label";
-      const lb = document.createElement("b"); lb.textContent = pin.name;
-      label.append(lb, document.createElement("br"), document.createTextNode(pin.host));
-      el.append(dot, nameTag, label);
-      const x = document.createElement("div"); x.className = "fp-x"; x.textContent = "✕";
-      x.onclick = async (e) => { e.stopPropagation();
-        await api("/api/floorplans/pins/"+pin.pin_id,{method:"DELETE"}); loadPlans(); };
-      el.appendChild(x);
-      // drag to move (edit mode)
-      el.addEventListener("mousedown", ev => {
-        if (!editing) return; ev.preventDefault();
-        const r = stage.getBoundingClientRect();
-        function mv(e){ const nx=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
-          const ny=Math.max(0,Math.min(1,(e.clientY-r.top)/r.height));
-          el.style.left=(nx*100)+"%"; el.style.top=(ny*100)+"%"; el._nx=nx; el._ny=ny; }
-        function up(){ document.removeEventListener("mousemove",mv); document.removeEventListener("mouseup",up);
-          if (el._nx!=null) api("/api/floorplans/pins/"+pin.pin_id,{method:"PUT",
-            body:JSON.stringify({x:el._nx,y:el._ny})}).catch(e=>toast(e.message,true)); }
-        document.addEventListener("mousemove",mv); document.addEventListener("mouseup",up);
-      });
-      return el;
-    }
-
-    async function placePin(fpId, deviceId, x, y) {
-      try { await api("/api/floorplans/"+fpId+"/pins",{method:"POST",
-        body:JSON.stringify({device_id:deviceId,x:x,y:y})});
-        armedDevice = null; await loadPlans();
-      } catch(e){ toast(e.message,true); }
-    }
-
-    function renderPalette() {
-      const pal = $("fp-palette"); if (!pal) return; pal.innerHTML = "";
-      if (!editing) return;
-      const placed = placedSet();
-      for (const d of devices) {
-        const chip = document.createElement("button");
-        chip.className = "btn small fp-chip" + (armedDevice===d.id?" armed":"") + (placed.has(d.id)?" placed":"");
-        chip.textContent = d.name;
-        chip.title = d.host + (placed.has(d.id) ? " (already placed — click to add again)" : "");
-        chip.onclick = () => { armedDevice = (armedDevice===d.id?null:d.id); renderPalette();
-          document.querySelectorAll(".fp-stage").forEach(s=>s.classList.toggle("placing", !!armedDevice)); };
-        pal.appendChild(chip);
-      }
-      if (!devices.length) pal.innerHTML = '<span class="muted">No devices in scope to place yet.</span>';
-    }
-
-    /* ---- status colouring + heat ---- */
-    let lastStatus = {};
-    async function refreshStatus() {
-      if (histMode) return;
-      try {
-        const d = await api("/api/floorplans/status?seconds=" + windowSec + SITEQ);
-        lastStatus = d.devices; applyStatus();
-      } catch(e){ /* silent */ }
-    }
-    function applyStatus() {
-      document.querySelectorAll(".fp-pin").forEach(el => {
-        const s = lastStatus[el.dataset.dev];
-        const dot = el.querySelector(".fp-dot");
-        const state = s ? s.state : "unknown";
-        dot.className = "fp-dot state-" + state + (state==="down" ? " fp-throb" : "");
-      });
-      for (const p of plans) { const st=document.querySelector('.fp-stage[data-fp="'+p.id+'"]');
-        if (st){ const c=st.querySelector("canvas.fp-heat"); if(c && c.width) drawHeat(p,c); } }
-    }
-    function dropsFor(deviceId) {
-      if (histMode && timeline) { return histDropsAt(deviceId); }
-      const s = lastStatus[deviceId]; return s ? (s.drops||0) : 0;
-    }
-    function drawHeat(p, canvas) {
-      const ctx = canvas.getContext("2d");
-      ctx.clearRect(0,0,canvas.width,canvas.height);
-      if (windowSec === 0 && !histMode) return;   // Live = no accumulated heat
-      // max drops across all pins for normalisation
-      let maxD = 1;
-      for (const q of plans) for (const pin of q.pins) maxD = Math.max(maxD, dropsFor(pin.device_id));
-      ctx.globalCompositeOperation = "lighter";
-      for (const pin of p.pins) {
-        const dr = dropsFor(pin.device_id); if (dr <= 0) continue;
-        const cx = pin.x*canvas.width, cy = pin.y*canvas.height;
-        const t = dr/maxD;                       // 0..1 problem intensity
-        const rad = 26 + t*70;
-        const alpha = 0.20 + t*0.55;             // ever-deeper red
-        const g = ctx.createRadialGradient(cx,cy,0,cx,cy,rad);
-        g.addColorStop(0, "rgba(255,40,20,"+alpha+")");
-        g.addColorStop(1, "rgba(255,40,20,0)");
-        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx,cy,rad,0,7); ctx.fill();
-      }
-      ctx.globalCompositeOperation = "source-over";
-    }
-
-    /* ---- history scrubber ---- */
-    let histAt = null;
-    async function loadTimeline() {
-      timeline = await api("/api/floorplans/timeline?seconds=" + histWindow + SITEQ);
-      applyHist(1);
-    }
-    function histDropsAt(deviceId) {
-      const t = timeline && timeline.devices[deviceId]; if (!t) return 0;
-      const cut = histAt || timeline.now;
-      let n = 0; for (const [ts,type] of t.events) if (type==="down" && ts<=cut) n++;
-      return n;
-    }
-    function stateAt(deviceId, cut) {
-      const t = timeline && timeline.devices[deviceId]; if (!t) return "up";
-      let state = "up";  // assume up unless an outage says otherwise
-      for (const [ts,type] of t.events) { if (ts>cut) break; state = (type==="down")?"down":"up"; }
-      return state;
-    }
-    function applyHist(frac) {
-      if (!timeline) return;
-      const cut = timeline.start + (timeline.now - timeline.start) * frac;
-      histAt = cut;
-      $("fp-hist-time").textContent = frac >= 0.999 ? "now" : new Date(cut*1000).toLocaleString();
-      document.querySelectorAll(".fp-pin").forEach(el => {
-        const st = stateAt(el.dataset.dev, cut);
-        el.querySelector(".fp-dot").className = "fp-dot state-"+st + (st==="down"?" fp-throb":"");
-      });
-      for (const p of plans) { const s=document.querySelector('.fp-stage[data-fp="'+p.id+'"]');
-        if (s){ const c=s.querySelector("canvas.fp-heat"); if(c&&c.width) drawHeat(p,c); } }
-    }
-
-    /* ---- upload ---- */
-    async function upload() {
-      const fileEl = $("fp-file"); const f = fileEl.files[0];
-      if (!f) { toast("Choose an image or PDF first", true); return; }
-      const fd = new FormData();
-      fd.append("file", f);
-      fd.append("name", $("fp-name").value.trim());
-      if (SITE) fd.append("site", SITE);
-      const btn = $("fp-upload"); btn.disabled = true; btn.textContent = "Uploading…";
-      try {
-        const res = await fetch("/api/floorplans", {method:"POST", body:fd});
-        const d = await res.json();
-        if (!res.ok) throw new Error(d.error || res.statusText);
-        fileEl.value=""; $("fp-name").value=""; toast("Floor plan added");
-        await loadPlans();
-      } catch(e){ toast(e.message, true); }
-      finally { btn.disabled=false; btn.textContent="⬆ Upload"; }
-    }
-
-    function setWindow(sec) {
-      histMode = false; windowSec = sec;
-      $("fp-hist-bar").style.display = "none";
-      refreshStatus();
-    }
-    function enterHist() {
-      histMode = true;
-      $("fp-hist-bar").style.display = "block";
-      loadTimeline().catch(e=>toast(e.message,true));
-    }
-
-    function init() {
-      $("fp-window").addEventListener("click", ev => {
-        const b = ev.target.closest(".range-btn"); if(!b) return;
-        document.querySelectorAll("#fp-window .range-btn").forEach(x=>x.classList.remove("active"));
-        b.classList.add("active");
-        if (b.dataset.hist) enterHist(); else setWindow(parseInt(b.dataset.sec,10));
-      });
-      $("fp-hist-window").addEventListener("click", ev => {
-        const b=ev.target.closest(".range-btn"); if(!b)return;
-        document.querySelectorAll("#fp-hist-window .range-btn").forEach(x=>x.classList.remove("active"));
-        b.classList.add("active"); histWindow=parseInt(b.dataset.sec,10);
-        loadTimeline().catch(e=>toast(e.message,true));
-      });
-      $("fp-hist-slider").addEventListener("input", ev => applyHist(parseInt(ev.target.value,10)/1000));
-      $("fp-edit-btn").addEventListener("click", () => {
-        editing = !editing;
-        $("fp-edit-btn").classList.toggle("primary", editing);
-        $("fp-edit-btn").textContent = editing ? "✓ Done" : "✎ Edit layout";
-        $("fp-edit-bar").style.display = editing ? "block" : "none";
-        armedDevice = null; render();
-      });
-      $("fp-upload").addEventListener("click", upload);
-      loadPlans().catch(e=>toast(e.message,true));
-      pollTimer = setInterval(() => { if (!histMode) refreshStatus(); }, 5000);
-      window.addEventListener("resize", () => {
-        for (const p of plans) { const s=document.querySelector('.fp-stage[data-fp="'+p.id+'"]');
-          if (s){ const c=s.querySelector("canvas.fp-heat"); const im=s.querySelector("img");
-            if(c&&im){ c.width=s.clientWidth; c.height=s.clientHeight; drawHeat(p,c);} } }
-      });
-    }
-    return { init };
-  })();
-
-  // start in grid mode
-  gridStarted = true; Grid.init();
+    } catch (e) { /* keep last render on transient errors */ }
+  }
+  refresh();
+  setInterval(refresh, {{ refresh }} * 1000);
 })();
 </script>
-{% endblock %}
+</body>
+</html>

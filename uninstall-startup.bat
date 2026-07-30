@@ -1,15 +1,64 @@
 @echo off
-REM  Removes the Ascom Ping Monitor startup task and firewall rule.
-REM  Right-click and "Run as administrator".
-net session >nul 2>&1
+REM ============================================================
+REM  Ascom Ping Monitor - Windows exe builder
+REM
+REM  Requirements: Python 3.9+ from python.org installed with
+REM  "Add python.exe to PATH" ticked. Then just double-click me.
+REM  Result: dist\AscomPingMonitor.exe (single file, no install)
+REM ============================================================
+cd /d "%~dp0"
+
+where py >nul 2>nul
 if errorlevel 1 (
-    echo ERROR: administrator rights required.
-    pause
-    exit /b 1
+    where python >nul 2>nul
+    if errorlevel 1 (
+        echo ERROR: Python not found. Install it from https://python.org
+        echo        and tick "Add python.exe to PATH" during setup.
+        pause
+        exit /b 1
+    )
+    set PY=python
+) else (
+    set PY=py -3
 )
-taskkill /im AscomPingMonitor.exe /f >nul 2>&1
-schtasks /delete /f /tn "Ascom Ping Monitor"
-netsh advfirewall firewall delete rule name="Ascom Ping Monitor"
-echo Removed. Ping data in C:\ProgramData\AscomPingMonitor was kept -
-echo delete that folder manually if you also want the history gone.
+
+echo === Creating build environment...
+%PY% -m venv build-venv || (echo venv creation failed & pause & exit /b 1)
+call build-venv\Scripts\activate.bat
+
+echo === Installing dependencies (flask, waitress, pystray, pillow, pyinstaller)...
+pip install --quiet --upgrade pip
+pip install --quiet flask waitress pystray pillow pyinstaller python-tds certifi || (echo pip install failed & pause & exit /b 1)
+
+echo === Installing pyodbc (for Windows-auth SQL Server; optional)...
+pip install --quiet pyodbc || echo    (pyodbc unavailable - SQL-login auth will still work via python-tds)
+
+echo === Building AscomPingMonitor.exe (takes a minute)...
+pyinstaller --noconfirm --clean --onefile --noconsole ^
+    --name AscomPingMonitor ^
+    --icon "static\branding\favicon.ico" ^
+    --add-data "templates;templates" ^
+    --add-data "static;static" ^
+    --add-data "pingmon\data;pingmon\data" ^
+    --hidden-import waitress ^
+    --hidden-import pystray._win32 ^
+    --hidden-import pyodbc ^
+    --hidden-import pytds ^
+    --collect-submodules pytds ^
+    --hidden-import certifi ^
+    --collect-data certifi ^
+    run.py
+if errorlevel 1 (echo BUILD FAILED & pause & exit /b 1)
+
+echo.
+echo ============================================================
+echo   Done!  Your exe is:  dist\AscomPingMonitor.exe
+echo.
+echo   - Double-click it to run. Your browser opens automatically
+echo     at http://localhost:8080  (login: ascom / ascom!12345)
+echo   - Data + logs live in C:\ProgramData\AscomPingMonitor
+echo   - To start it with Windows and open the firewall for
+echo     other devices, right-click install-startup.bat and
+echo     "Run as administrator" (copy it next to the exe first).
+echo ============================================================
 pause

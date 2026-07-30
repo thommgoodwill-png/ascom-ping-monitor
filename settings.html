@@ -1,69 +1,87 @@
 {% extends "base.html" %}
 {% block content %}
-<style>
-  .drag-grip { cursor:grab; color:var(--muted); font-size:16px; user-select:none;
-    padding:0 4px; display:inline-block; }
-  .drag-grip:active { cursor:grabbing; }
-  #dev-table tbody tr.dragging { opacity:.5; background:var(--surface-2); }
-</style>
-<h1 class="page-title">Devices</h1>
+<h1 class="page-title">Packet capture</h1>
 
-<div class="card">
-  <h2>Add a device</h2>
-  <p class="card-sub">Anything that answers ICMP ping — servers, switches, APs, printers, gateways.</p>
-  <div class="f-row">
-    <div>
-      <label class="f-label" for="add-name">Name</label>
-      <input type="text" id="add-name" placeholder="Core switch">
-    </div>
-    <div>
-      <label class="f-label" for="add-host">IP address or hostname</label>
-      <input type="text" id="add-host" placeholder="192.168.1.1">
-    </div>
-    <div>
-      <label class="f-label" for="add-interval">Ping interval override <span class="muted">(optional)</span></label>
-      <input type="number" id="add-interval" min="0.2" max="60" step="0.1" placeholder="use global">
-      <div class="f-help">Seconds, 0.2–60. Leave blank to use the global interval.</div>
-    </div>
-    <div>
-      <label class="f-label" for="add-warn">Warn / crit override (ms) <span class="muted">(optional)</span></label>
-      <div style="display:flex;gap:6px;">
-        <input type="number" id="add-warn" min="1" step="1" placeholder="warn">
-        <input type="number" id="add-crit" min="1" step="1" placeholder="crit">
-      </div>
-      <div class="f-help">Per-device thresholds — e.g. a VPN link that is always ~80 ms. Blank = global.</div>
-    </div>
-    <div>
-      <label class="f-label" for="add-ports">TCP ports to check <span class="muted">(optional)</span></label>
-      <input type="text" id="add-ports" placeholder="443, 22, 3389">
-      <div class="f-help">Comma-separated. Checks the service is actually listening, not just that the host pings.</div>
-    </div>
-    <div>
-      <label class="f-label" for="add-url">HTTP(S) health URL <span class="muted">(optional)</span></label>
-      <input type="text" id="add-url" placeholder="https://host/health">
-      <div class="f-help">Checks status code, response time and TLS certificate expiry.</div>
-    </div>
-    <div style="display:flex;align-items:flex-end;">
-      <button class="btn primary" id="add-btn">+ Add device</button>
-    </div>
-  </div>
+<div class="card" id="cap-disabled" style="display:none;">
+  <h2>Packet capture is switched off</h2>
+  <p class="card-sub">Enable it under <a href="/settings">Settings → Packet capture</a>.
+    It's off by default because capturing traffic is a privileged, sensitive operation.</p>
 </div>
 
-<div class="card">
-  <h2>Monitored devices</h2>
-  <p class="card-sub">Toggle a device off to pause pinging it without losing its history.
-    Drag the <span style="letter-spacing:1px;">⠿</span> handle to reorder devices.</p>
-  <table class="list" id="dev-table">
-    <thead>
-      <tr>
-        <th></th><th>Enabled</th><th>Name</th><th>Host</th><th>MAC</th>
-        <th class="num">Interval</th><th class="num">Warn/Crit</th>
-        <th>Status</th><th class="num">Last ping</th><th class="right">Actions</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
-  <p class="muted" id="dev-empty" style="display:none;">No devices yet — add one above.</p>
+<div class="card" id="cap-unavailable" style="display:none;">
+  <h2>tcpdump not found</h2>
+  <p class="card-sub">The capture engine (<code>tcpdump</code>) isn't installed on this host.
+    On Linux: <code>apt install tcpdump</code>. On Windows: install
+    <a href="https://npcap.com" target="_blank" rel="noopener">Npcap</a>.</p>
+</div>
+
+<div id="cap-main" style="display:none;">
+  <div class="card" style="border-left:3px solid var(--warn);">
+    <p style="margin:0;font-size:13px;">
+      <b>What you'll see:</b> this captures traffic that reaches the monitor —
+      its own traffic plus broadcast/multicast. On a switched network you will
+      <b>not</b> see other devices talking to each other unless a
+      <b>switch SPAN / mirror port</b> feeds this machine's interface.
+      Every capture is saved as a <b>.pcap you can open in Wireshark</b>.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>New capture</h2>
+    <div class="f-row">
+      <div>
+        <label class="f-label">Interface</label>
+        <select id="cap-iface"></select>
+      </div>
+      <div>
+        <label class="f-label">Filter <span class="muted">(BPF, optional)</span></label>
+        <input type="text" id="cap-bpf" placeholder="e.g. host 192.168.1.50 and port 80">
+        <div class="f-help">Same syntax as Wireshark's capture filter / tcpdump.
+          Examples: <code>icmp</code>, <code>tcp port 443</code>, <code>host 10.0.0.5</code>.</div>
+      </div>
+      <div>
+        <label class="f-label">Stop after (seconds)</label>
+        <input type="number" id="cap-secs" min="1" value="15">
+      </div>
+      <div>
+        <label class="f-label">Stop after (packets)</label>
+        <input type="number" id="cap-pkts" min="10" value="1000">
+      </div>
+      <div style="display:flex;align-items:flex-end;">
+        <button class="btn primary" id="cap-start">● Start capture</button>
+      </div>
+    </div>
+    <div id="cap-progress" class="muted" style="display:none;"></div>
+  </div>
+
+  <div class="card" id="cap-results-card" style="display:none;">
+    <h2 id="cap-result-title">Packets <span class="muted" id="cap-result-meta"></span></h2>
+    <div style="overflow-x:auto;max-height:520px;">
+      <table class="list" id="cap-table">
+        <thead><tr><th>#</th><th>Time</th><th>Source</th><th>Destination</th>
+          <th>Proto</th><th>Info</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Saved captures</h2>
+    <p class="card-sub">View a capture in the browser, or download the .pcap and open
+      it in Wireshark for full decode. You can also open a .pcap from elsewhere.</p>
+    <div class="filter-row" style="margin-bottom:12px;">
+      <label class="btn small" style="cursor:pointer;">
+        ⬆ Open a .pcap file
+        <input type="file" id="cap-upload" accept=".pcap,.pcapng,.cap" style="display:none;">
+      </label>
+      <span class="muted" id="cap-upload-status"></span>
+    </div>
+    <table class="list" id="cap-files">
+      <thead><tr><th>File</th><th class="num">Size</th><th>When</th><th class="right">Actions</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="muted" id="cap-files-empty" style="display:none;">No saved captures yet.</p>
+  </div>
 </div>
 {% endblock %}
 
@@ -71,183 +89,198 @@
 <script>
 (function () {
   "use strict";
-  let dragging = false, dragRow = null;
+  let pollTimer = null;
 
-  function rowAfter(tb, y) {
-    const rows = [...tb.querySelectorAll("tr:not(.dragging)")];
-    let closest = null, closestOffset = -Infinity;
-    for (const r of rows) {
-      const box = r.getBoundingClientRect();
-      const offset = y - box.top - box.height / 2;
-      if (offset < 0 && offset > closestOffset) { closestOffset = offset; closest = r; }
-    }
-    return closest;
+  function fmtSize(b) {
+    if (b < 1024) return b + " B";
+    if (b < 1048576) return (b / 1024).toFixed(1) + " KB";
+    return (b / 1048576).toFixed(1) + " MB";
   }
+  const PROTO_COLOR = {
+    TCP: "var(--s1)", UDP: "var(--s2)", ICMP: "var(--s8)", ICMP6: "var(--s8)",
+    ARP: "var(--s5)", IGMP: "var(--s3)", IPv6: "var(--s7)",
+  };
 
-  async function saveOrder() {
-    const tb = document.querySelector("#dev-table tbody");
-    const ids = [...tb.querySelectorAll("tr")].map(tr => tr.dataset.id).filter(Boolean);
-    try { await api("/api/devices/reorder", { method: "POST", body: JSON.stringify({ ids }) }); }
-    catch (e) { toast(e.message, true); load(); }
-  }
-
-  function pillFor(d) {
-    if (!d.enabled) return ["disabled", "○ Disabled"];
-    if (d.state === "down") return ["down", "✖ Down"];
-    if (d.in_loss) return ["warn", "▲ Loss"];
-    if (d.state === "up") {
-      if (d.last_latency != null && d.last_latency > d.eff_crit) return ["crit", "■ Slow"];
-      if (d.last_latency != null && d.last_latency > d.eff_warn) return ["warn", "▲ Warn"];
-      return ["up", "● Up"];
-    }
-    return ["unknown", "… Waiting"];
-  }
-
-  async function load() {
-    if (dragging) return;   // don't rebuild the table mid-drag
-    const data = await api("/api/devices");
-    const tb = document.querySelector("#dev-table tbody");
-    tb.innerHTML = "";
-    document.getElementById("dev-empty").style.display =
-      data.devices.length ? "none" : "block";
-    for (const d of data.devices) {
-      const tr = document.createElement("tr");
-      tr.dataset.id = d.id;
-
-      // drag handle
-      const tdGrip = document.createElement("td");
-      const grip = document.createElement("span");
-      grip.className = "drag-grip"; grip.textContent = "⠿"; grip.title = "Drag to reorder";
-      grip.draggable = true;
-      grip.addEventListener("dragstart", e => {
-        dragRow = tr; dragging = true; tr.classList.add("dragging");
-        e.dataTransfer.effectAllowed = "move";
-        try { e.dataTransfer.setData("text/plain", d.id); } catch (_) {}
-      });
-      grip.addEventListener("dragend", () => {
-        tr.classList.remove("dragging"); dragging = false; dragRow = null; saveOrder();
-      });
-      tdGrip.appendChild(grip); tr.appendChild(tdGrip);
-
-      // enabled switch
-      const tdEn = document.createElement("td");
-      const sw = document.createElement("label");
-      sw.className = "switch";
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.checked = !!d.enabled;
-      cb.addEventListener("change", async () => {
-        try { await api("/api/devices/" + d.id, { method: "PUT", body: JSON.stringify({ enabled: cb.checked }) }); }
-        catch (e) { toast(e.message, true); cb.checked = !cb.checked; }
-      });
-      const tk = document.createElement("span"); tk.className = "track";
-      sw.appendChild(cb); sw.appendChild(tk); tdEn.appendChild(sw); tr.appendChild(tdEn);
-
-      const tdName = document.createElement("td");
-      tdName.style.fontWeight = "600";
-      tdName.className = "device-clickable";
-      tdName.title = "Open detailed view";
-      if (d.tile_color) {
-        const dot = document.createElement("span");
-        dot.className = "flag-dot"; dot.style.background = d.tile_color;
-        tdName.appendChild(dot);
+  async function loadEnv() {
+    const e = await api("/api/capture/env");
+    document.getElementById("cap-disabled").style.display = e.enabled ? "none" : "block";
+    document.getElementById("cap-unavailable").style.display =
+      (e.enabled && !e.available) ? "block" : "none";
+    document.getElementById("cap-main").style.display =
+      (e.enabled && e.available) ? "block" : "none";
+    if (e.enabled && e.available) {
+      const sel = document.getElementById("cap-iface");
+      sel.innerHTML = "";
+      const anyOpt = document.createElement("option");
+      anyOpt.value = "any"; anyOpt.textContent = "any (all interfaces)";
+      sel.appendChild(anyOpt);
+      for (const n of e.interfaces) {
+        if (n === "any") continue;
+        const o = document.createElement("option");
+        o.value = n; o.textContent = n;
+        sel.appendChild(o);
       }
-      tdName.appendChild(document.createTextNode(d.name));
-      tdName.addEventListener("click", () => deviceDetailModal(d.id));
-      tr.appendChild(tdName);
-      const tdHost = document.createElement("td");
-      tdHost.textContent = d.host;
-      tr.appendChild(tdHost);
-      const tdMac = document.createElement("td");
-      tdMac.className = "mono";
-      tdMac.style.fontSize = "12px";
-      tdMac.textContent = (d.mac || "—") + (d.vendor ? "  " + d.vendor : "");
-      tdMac.title = d.mac ? "picked up from the ARP table" :
-        "no MAC yet — only learnable for devices on the monitor's own subnet";
-      tr.appendChild(tdMac);
-      const tdInt = document.createElement("td");
-      tdInt.className = "num mono";
-      tdInt.textContent = d.interval_override ? d.interval_override + " s" : "global";
-      tr.appendChild(tdInt);
+      document.getElementById("cap-secs").max = e.max_seconds;
+      document.getElementById("cap-pkts").max = e.max_packets;
+    }
+    renderFiles(e.captures);
+  }
 
-      const tdThr = document.createElement("td");
-      tdThr.className = "num mono";
-      tdThr.textContent = (d.warn_override || d.crit_override)
-        ? d.eff_warn + " / " + d.eff_crit : "global";
-      tr.appendChild(tdThr);
-
-      const tdSt = document.createElement("td");
-      const [cls, label] = pillFor(d);
-      const pill = document.createElement("span");
-      pill.className = "pill " + cls;
-      pill.textContent = label;
-      tdSt.appendChild(pill);
-      tr.appendChild(tdSt);
-
-      const tdLat = document.createElement("td");
-      tdLat.className = "num mono";
-      if (d.last_latency != null) {
-        tdLat.textContent = d.last_latency.toFixed(1) + " ms";
-        tdLat.className += " " + latClass(d.last_latency, d.eff_warn, d.eff_crit);
-      } else tdLat.textContent = "—";
-      tr.appendChild(tdLat);
-
-      const tdAct = document.createElement("td");
-      tdAct.className = "right";
-      const edit = document.createElement("button");
-      edit.className = "btn small";
-      edit.textContent = "Edit";
-      edit.addEventListener("click", () => deviceEditModal(d, load));
+  function renderFiles(files) {
+    const tb = document.querySelector("#cap-files tbody");
+    tb.innerHTML = "";
+    document.getElementById("cap-files-empty").style.display =
+      files.length ? "none" : "block";
+    for (const f of files) {
+      const tr = document.createElement("tr");
+      const c1 = document.createElement("td");
+      c1.textContent = f.file; c1.className = "mono"; c1.style.fontSize = "12px";
+      const c2 = document.createElement("td");
+      c2.className = "num mono"; c2.textContent = fmtSize(f.size);
+      const c3 = document.createElement("td");
+      c3.className = "muted"; c3.textContent = new Date(f.mtime * 1000).toLocaleString();
+      const c4 = document.createElement("td");
+      c4.className = "right";
+      const view = document.createElement("button");
+      view.className = "btn small"; view.textContent = "View";
+      view.addEventListener("click", () => viewFile(f.file));
+      const dl = document.createElement("a");
+      dl.className = "btn small"; dl.style.marginLeft = "6px";
+      dl.textContent = "⬇ .pcap";
+      dl.href = "/api/capture/file/" + encodeURIComponent(f.file);
       const del = document.createElement("button");
-      del.className = "btn small danger";
-      del.style.marginLeft = "6px";
+      del.className = "btn small danger"; del.style.marginLeft = "6px";
       del.textContent = "Delete";
       del.addEventListener("click", async () => {
-        if (!confirm('Delete "' + d.name + '" and all of its history?')) return;
-        try { await api("/api/devices/" + d.id, { method: "DELETE" }); load(); }
-        catch (e) { toast(e.message, true); }
+        if (!confirm("Delete " + f.file + "?")) return;
+        try { await api("/api/capture/delete", { method: "POST",
+          body: JSON.stringify({ file: f.file }) }); loadEnv(); }
+        catch (err) { toast(err.message, true); }
       });
-      tdAct.appendChild(edit); tdAct.appendChild(del);
-      tr.appendChild(tdAct);
+      c4.append(view, dl, del);
+      tr.append(c1, c2, c3, c4);
       tb.appendChild(tr);
     }
   }
 
-  document.getElementById("add-btn").addEventListener("click", async () => {
-    const name = document.getElementById("add-name").value.trim();
-    const host = document.getElementById("add-host").value.trim();
-    const iv = document.getElementById("add-interval").value.trim();
-    const wo = document.getElementById("add-warn").value.trim();
-    const co = document.getElementById("add-crit").value.trim();
-    const ports = document.getElementById("add-ports").value.trim();
-    const url = document.getElementById("add-url").value.trim();
-    if (!name || !host) { toast("Name and host are required", true); return; }
+  function renderPackets(rows) {
+    const tb = document.querySelector("#cap-table tbody");
+    tb.innerHTML = "";
+    let i = 0;
+    for (const p of rows) {
+      i++;
+      const tr = document.createElement("tr");
+      const mk = (txt, cls) => { const td = document.createElement("td");
+        td.textContent = txt; if (cls) td.className = cls; return td; };
+      tr.appendChild(mk(i, "num mono"));
+      tr.appendChild(mk(p.time, "mono"));
+      tr.appendChild(mk(p.src || "—", "mono"));
+      tr.appendChild(mk(p.dst || "—", "mono"));
+      const pr = document.createElement("td");
+      const b = document.createElement("span");
+      b.className = "pill"; b.style.background = "var(--surface-2)";
+      b.style.color = PROTO_COLOR[p.proto] || "var(--ink-2)";
+      b.textContent = p.proto;
+      pr.appendChild(b);
+      tr.appendChild(pr);
+      tr.appendChild(mk(p.info, "mono"));
+      tr.querySelectorAll("td.mono").forEach(td => td.style.fontSize = "11.5px");
+      tb.appendChild(tr);
+    }
+  }
+
+  async function viewFile(fname) {
+    document.getElementById("cap-result-title").firstChild.textContent = "Packets ";
+    document.getElementById("cap-result-meta").textContent = "— loading " + fname + "…";
+    document.getElementById("cap-results-card").style.display = "block";
+    document.getElementById("cap-results-card").scrollIntoView({ behavior: "smooth" });
     try {
-      await api("/api/devices", {
-        method: "POST",
-        body: JSON.stringify({ name: name, host: host, interval_override: iv || null,
-                               warn_override: wo || null, crit_override: co || null,
-                               tcp_ports: ports || null, check_url: url || null }),
-      });
-      ["add-name","add-host","add-interval","add-warn","add-crit","add-ports","add-url"]
-        .forEach(id => document.getElementById(id).value = "");
-      toast("Device added — pinging starts within a few seconds");
-      load();
-    } catch (e) { toast(e.message, true); }
+      const d = await api("/api/capture/view/" + encodeURIComponent(fname) + "?limit=2000");
+      renderPackets(d.packets || []);
+      document.getElementById("cap-result-meta").textContent =
+        "— " + d.count + " packets in " + fname +
+        (d.shown < d.count ? " (showing first " + d.shown + " — download for the rest)" : "");
+    } catch (e) {
+      document.getElementById("cap-result-meta").textContent = "— " + e.message;
+      toast(e.message, true);
+    }
+  }
+
+  document.getElementById("cap-start").addEventListener("click", async () => {
+    const btn = document.getElementById("cap-start");
+    const body = {
+      iface: document.getElementById("cap-iface").value,
+      bpf: document.getElementById("cap-bpf").value,
+      seconds: parseInt(document.getElementById("cap-secs").value, 10),
+      packets: parseInt(document.getElementById("cap-pkts").value, 10),
+    };
+    btn.disabled = true; btn.textContent = "● Capturing…";
+    const prog = document.getElementById("cap-progress");
+    prog.style.display = "block"; prog.textContent = "Starting…";
+    try {
+      const { id } = await api("/api/capture/start", { method: "POST",
+        body: JSON.stringify(body) });
+      poll(id);
+    } catch (e) {
+      toast(e.message, true);
+      prog.textContent = "Failed: " + e.message;
+      btn.disabled = false; btn.textContent = "● Start capture";
+    }
   });
 
-  // reorder: while a row is being dragged, move it under the cursor
-  document.querySelector("#dev-table tbody").addEventListener("dragover", e => {
-    if (!dragRow) return;
-    e.preventDefault(); e.dataTransfer.dropEffect = "move";
-    const tb = e.currentTarget;
-    const after = rowAfter(tb, e.clientY);
-    if (after == null) tb.appendChild(dragRow);
-    else tb.insertBefore(dragRow, after);
+  function poll(id) {
+    clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+      let s;
+      try { s = await api("/api/capture/status/" + id); }
+      catch (e) { clearInterval(pollTimer); return; }
+      const prog = document.getElementById("cap-progress");
+      if (s.state === "running") {
+        prog.textContent = `Capturing on ${s.iface} — ${s.elapsed}s / ${s.seconds}s…`;
+      } else {
+        clearInterval(pollTimer);
+        const btn = document.getElementById("cap-start");
+        btn.disabled = false; btn.textContent = "● Start capture";
+        if (s.state === "error") {
+          prog.textContent = "Error: " + s.error;
+          toast(s.error, true);
+        } else {
+          prog.style.display = "none";
+          document.getElementById("cap-results-card").style.display = "block";
+          document.getElementById("cap-result-meta").textContent =
+            `— ${s.count} packets on ${s.iface}` +
+            (s.count >= 500 ? " (showing first 500 — full set in the .pcap)" : "");
+          renderPackets(s.summary || []);
+          loadEnv();
+        }
+      }
+    }, 1000);
+  }
+
+  // ---- open an external .pcap ----
+  document.getElementById("cap-upload").addEventListener("change", async (ev) => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    const st = document.getElementById("cap-upload-status");
+    st.textContent = "Uploading " + file.name + "…";
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const res = await fetch("/api/capture/upload", { method: "POST",
+        body: fd, credentials: "same-origin" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || res.statusText);
+      st.textContent = "";
+      ev.target.value = "";
+      await loadEnv();
+      viewFile(d.file);
+    } catch (e) {
+      st.textContent = "";
+      toast("Upload failed: " + e.message, true);
+    }
   });
 
-  load();
-  setInterval(load, 10000);
+  loadEnv().catch(e => toast(e.message, true));
 })();
 </script>
 {% endblock %}
