@@ -206,23 +206,34 @@
       ctx.lineWidth = 2;
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
-      // Break the line only across a REAL gap. Base the threshold on the data's
-      // own cadence (median spacing between present points) so a slow ping
-      // interval — e.g. 30s pings inside 7s buckets — still draws a continuous
-      // line, while a genuine outage (several missed samples) still breaks it.
-      let cadence = o.bucket || 60;
+      // Break the line only across a REAL gap. The allowed gap is derived from the
+      // data's LOCAL spacing, not from one median for the whole window: when the
+      // ping interval is changed part-way through (dense 5 s history, then one
+      // sample every few minutes) a single window-wide median is dominated by the
+      // dense stretch, so every newer point sits further apart than it permits and
+      // the recent end of the trace silently disappears. A rolling median follows
+      // the change, while a genuine outage still breaks the line.
+      const base = o.bucket || 60;
       const present = s.data.filter(p => p[1] != null);
-      if (present.length >= 3) {
-        const diffs = [];
-        for (let i = 1; i < present.length; i++) diffs.push(present[i][0] - present[i - 1][0]);
-        diffs.sort((a, b) => a - b);
-        cadence = Math.max(cadence, diffs[Math.floor(diffs.length / 2)]); // median
-      }
-      const maxGap = cadence * 3;
-      let prev = null;
+      const diffs = [];
+      for (let i = 1; i < present.length; i++) diffs.push(present[i][0] - present[i - 1][0]);
+      const W = 5;                                   // rolling half-window, in gaps
+      const med = (a, b) => {                        // median of diffs[a..b] inclusive
+        const w = diffs.slice(a, b + 1).sort((x, y) => x - y);
+        return w.length ? w[Math.floor(w.length / 2)] : base;
+      };
+      // Look both back and forward and take the more forgiving of the two, so the
+      // single seam where the cadence changes isn't itself mistaken for an outage.
+      const allow = diffs.map((d, j) => 3 * Math.max(
+        base,
+        med(Math.max(0, j - W), j),
+        med(j, Math.min(diffs.length - 1, j + W))));
+      const joined = new Array(present.length).fill(false);
+      let prev = null, k = -1;
       for (const p of s.data) {
         if (p[1] == null) { prev = null; continue; }
-        if (prev && p[0] - prev[0] <= maxGap) {
+        k++;                                         // index of p within `present`
+        if (prev && p[0] - prev[0] <= allow[k - 1]) {
           let segCol = col;
           if (o.thresholdColoring) {
             segCol = thresholdColor(Math.max(prev[1], p[1])) || col;
@@ -232,8 +243,20 @@
           ctx.moveTo(X(prev[0]), Y(prev[1]));
           ctx.lineTo(X(p[0]), Y(p[1]));
           ctx.stroke();
+          joined[k] = joined[k - 1] = true;
         }
         prev = p;
+      }
+      // A sample the line couldn't reach from either side would otherwise be
+      // invisible unless it happened to breach a threshold — which is how a
+      // dropped trace ends up looking like a scatter of stray red dots. Mark
+      // every orphan so no recorded sample is ever silently missing.
+      ctx.fillStyle = col;
+      for (let i = 0; i < present.length; i++) {
+        if (joined[i]) continue;
+        ctx.beginPath();
+        ctx.arc(X(present[i][0]), Y(present[i][1]), 2.5, 0, Math.PI * 2);
+        ctx.fill();
       }
       // breach markers on top (>=8px with 2px surface ring)
       for (const p of s.data) {
