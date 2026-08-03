@@ -183,7 +183,7 @@
         '<input id="ed-name"></div><div style="flex:2;"><label class="f-label">IP / hostname</label>' +
         '<input id="ed-host"></div></div>' +
       '<div class="f-row"><div><label class="f-label">Ping interval override (s)</label>' +
-        '<input id="ed-iv" type="number" min="0.2" max="60" step="0.1" placeholder="use global"></div>' +
+        '<input id="ed-iv" type="number" min="0.2" max="3600" step="0.1" placeholder="use global"></div>' +
         '<div><label class="f-label">Warn override (ms)</label><input id="ed-warn" type="number" placeholder="global"></div>' +
         '<div><label class="f-label">Crit override (ms)</label><input id="ed-crit" type="number" placeholder="global"></div></div>' +
       '<div class="f-row"><div><label class="f-label">TCP ports</label>' +

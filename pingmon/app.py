@@ -2028,7 +2028,7 @@ def _parse_interval(value):
     if value in (None, "", "null"):
         return None
     try:
-        return max(0.2, min(60.0, float(value)))
+        return max(0.2, min(3600.0, float(value)))
     except (TypeError, ValueError):
         return None
 

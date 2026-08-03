@@ -15,8 +15,8 @@
   <div class="f-row" style="margin-top:14px;">
     <div>
       <label class="f-label">Ping interval (seconds)</label>
-      <input type="number" data-key="ping_interval" min="0.2" max="60" step="0.1">
-      <div class="f-help">0.2 – 60 s between pings. Individual devices can override this.</div>
+      <input type="number" data-key="ping_interval" min="0.2" max="3600" step="0.1">
+      <div class="f-help">0.2 s – 1 hour (3600 s) between pings. Individual devices and sites can override this. Long intervals reduce load and stored data, but a device can be down for up to one interval before it is noticed.</div>
     </div>
     <div>
       <label class="f-label">Ping timeout (seconds)</label>

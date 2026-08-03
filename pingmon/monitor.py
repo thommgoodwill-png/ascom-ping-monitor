@@ -134,7 +134,7 @@ class DeviceWorker(threading.Thread):
     def interval(self):
         ov = self.device.get("interval_override")
         base = ov if ov else settings.get("ping_interval")
-        return max(0.2, min(60.0, float(base)))
+        return max(0.2, min(3600.0, float(base)))
 
     def run(self):
         while not self.stop_event.is_set():
@@ -166,9 +166,23 @@ class DeviceWorker(threading.Thread):
                                  daemon=True, name=f"checks-{self.device['id']}"
                                  ).start()
             self._update_state(ts, success)
-            # sleep the remainder of the interval
-            elapsed = time.time() - started
-            self.stop_event.wait(max(0.05, self.interval() - elapsed))
+            self._sleep_until_next(started)
+
+    def _sleep_until_next(self, started):
+        """Wait out the remainder of this device's interval.
+
+        Done in short chunks rather than one long wait: the interval can now be
+        as long as an hour, and re-reading it each chunk means an interval edit,
+        a device being disabled or monitoring being switched off takes effect
+        within a few seconds instead of whenever the next ping happened to be
+        due. (``stop_event`` already interrupts the wait for shutdown.)"""
+        while not self.stop_event.is_set():
+            remaining = self.interval() - (time.time() - started)
+            if remaining <= 0.05:
+                self.stop_event.wait(0.05)
+                return
+            if self.stop_event.wait(min(remaining, 5.0)):
+                return
 
     def _refresh_mac(self, ts):
         """Pick up the device's MAC from the neighbour table (same-subnet only).

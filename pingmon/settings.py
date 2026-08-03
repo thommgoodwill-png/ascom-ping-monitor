@@ -13,7 +13,7 @@ GUI_PASSWORD = "ascom!12345"
 DEFAULTS = {
     # -------- monitoring --------
     "monitoring_enabled": True,     # master on/off for all pinging
-    "ping_interval": 5.0,           # seconds between pings (1 - 60)
+    "ping_interval": 5.0,           # seconds between pings (0.2 s - 1 h)
     "ping_timeout": 2,              # seconds to wait for a reply (1 - 10)
     "fail_threshold": 3,            # consecutive failures before device is DOWN
     "warn_ms": 50.0,                # latency above this = warning (orange)
@@ -144,7 +144,7 @@ DEFAULTS = {
 }
 
 CLAMPS = {
-    "ping_interval": (0.2, 60.0),
+    "ping_interval": (0.2, 3600.0),
     "ping_timeout": (1, 10),
     "fail_threshold": (1, 20),
     "warn_ms": (1.0, 10000.0),

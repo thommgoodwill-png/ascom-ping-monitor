@@ -22,8 +22,12 @@
     for (const m of [1, 2, 2.5, 5, 10]) {
       if (rough <= m * mag) { step = m * mag; break; }
     }
+    // round the top UP to a whole step. Stopping at the last tick <= maxVal used
+    // to leave the axis short of the data — a 205 ms trace on a 0/100/200 axis
+    // was drawn clipped at the top and any threshold line above 204 vanished.
+    const top = Math.ceil(maxVal / step - 1e-9) * step;
     const ticks = [];
-    for (let v = 0; v <= maxVal + 1e-9; v += step) ticks.push(Math.round(v * 100) / 100);
+    for (let v = 0; v <= top + 1e-9; v += step) ticks.push(Math.round(v * 100) / 100);
     return ticks;
   }
 
@@ -111,16 +115,24 @@
     const plotH = L.h - L.top - L.bottom;
     if (plotW < 30 || plotH < 30) return;
 
-    // y scale: auto-scale to the actual latency so low pings aren't squashed.
-    // Uses the max plotted value (avg or max column) with headroom. A threshold
-    // guide line is included only when the data is near it (within 30%), so a
-    // healthy graph zooms right in but you still see the warning line as you
-    // approach it. Threshold lines above the axis auto-hide (drawn further down).
-    let dataMax = 0;
+    // y scale: fit the line that is actually DRAWN — the per-bucket average.
+    //
+    // It used to scale to the max column too, which is never plotted. Over a
+    // long window each bucket covers minutes, so one 1.8 s spike anywhere in 24 h
+    // pushed the axis to 2000 ms while the drawn line stayed at a few ms — the
+    // graph looked like it had stopped auto-scaling. The peak is still reported
+    // (caption below + tooltip), it just no longer dictates the scale.
+    //
+    // A threshold guide line is pulled in only when the data is near it (within
+    // 30%), so a healthy graph zooms right in but you still see the warning line
+    // as you approach it. Threshold lines above the axis auto-hide (drawn below).
+    let dataMax = 0;      // highest plotted value -> drives the axis
+    let peakMax = 0;      // highest single ping in the window -> reported only
     for (const s of o.series) {
       for (const p of s.data) {
-        if (p[2] != null && p[2] > dataMax) dataMax = p[2];  // max column
-        if (p[1] != null && p[1] > dataMax) dataMax = p[1];  // avg column
+        if (p[1] != null && p[1] > dataMax) dataMax = p[1];
+        if (p[1] != null && p[1] > peakMax) peakMax = p[1];
+        if (p[2] != null && p[2] > peakMax) peakMax = p[2];
       }
     }
     let yMax = Math.max(dataMax * 1.15, 5);
@@ -253,6 +265,26 @@
       }
     });
 
+    // The axis follows the plotted average, so a short spike inside a bucket can
+    // sit above the top of the chart. Say so rather than silently hiding it.
+    // only worth saying when the spike is well clear of both the axis and the
+    // plotted line — otherwise every healthy graph carries a pointless caption
+    if (peakMax > yTop * 1.15 && peakMax > dataMax * 1.5) {
+      const label = "peak " + Math.round(peakMax) + " ms";
+      ctx.font = "11px system-ui, sans-serif";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "top";
+      // the trace often runs right under this corner, so sit the label on a
+      // patch of the surface colour instead of letting it collide with the line
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = surface;
+      ctx.globalAlpha = 0.85;
+      ctx.fillRect(L.left + plotW - tw - 4, L.top, tw + 6, 15);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = ink2;
+      ctx.fillText(label, L.left + plotW - 1, L.top + 2);
+    }
+
     // crosshair
     if (this.hoverX != null) {
       const x = Math.round(this.hoverX) + 0.5;
@@ -317,6 +349,12 @@
         if (pt && pt[3] > 0) val.style.color = cssVar("--crit-text");
       } else {
         val.textContent = pt[1].toFixed(1) + " ms";
+        // each point is an average over the bucket; show the worst ping inside
+        // it when that is materially higher, so spikes aren't lost in the mean
+        if (pt[2] != null && pt[2] > pt[1] * 1.2 + 1) {
+          const pk = pt[2] >= 100 ? Math.round(pt[2]) : pt[2].toFixed(1);
+          val.textContent += " (peak " + pk + ")";
+        }
         if (pt[1] > o.crit) { val.textContent += " ■ crit"; val.style.color = cssVar("--crit-text"); }
         else if (pt[1] > o.warn) { val.textContent += " ▲ warn"; val.style.color = cssVar("--warn-text"); }
       }
