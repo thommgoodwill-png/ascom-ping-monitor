@@ -406,6 +406,18 @@ def register_routes(app):
             return jsonify(error="not found"), 404
         return jsonify(cleared=database.clear_site_data(site_id))
 
+    @app.route("/api/sites/<int:site_id>/clear-fails", methods=["POST"])
+    @admin_required
+    def api_site_clear_fails(site_id):
+        """Reset the failed-ping tally on every device at a site.
+
+        The gentle version of /clear: counters go back to zero, but the ping
+        history, graphs and event log all survive.
+        """
+        if not database.get_site(site_id):
+            return jsonify(error="not found"), 404
+        return jsonify(cleared=database.reset_site_fails(site_id))
+
     @app.route("/api/sites/<int:site_id>/settings", methods=["POST"])
     @admin_required
     def api_site_settings(site_id):
@@ -912,6 +924,21 @@ def register_routes(app):
     def api_delete_device(dev_id):
         database.delete_device(dev_id)
         return jsonify(ok=True)
+
+    @app.route("/api/devices/<int:dev_id>/clear-fails", methods=["POST"])
+    @login_required
+    def api_device_clear_fails(dev_id):
+        """Reset one device's running failed-ping tally.
+
+        Only the counter goes — the ping history, the graph and the event log
+        are untouched, so this clears the running total after a known outage
+        without destroying the record of it. Same permission as editing the
+        device, since it is far less destructive than deleting one.
+        """
+        cleared = database.reset_device_fails(dev_id)
+        if cleared is None:
+            return jsonify(error="not found"), 404
+        return jsonify(ok=True, cleared=cleared)
 
     @app.route("/api/devices/<int:dev_id>/detail")
     @login_required

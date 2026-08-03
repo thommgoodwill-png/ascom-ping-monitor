@@ -42,13 +42,20 @@
 
 <div class="card">
   <h2>Stored data</h2>
-  <p class="card-sub">Clear the stored ping history, events and the failed-ping
-    tallies for every device at this site. The devices themselves are kept — only
-    their recorded data is wiped, and it starts filling again on the next ping.</p>
+  <p class="card-sub">Tidy up what has been recorded for every device at this site.
+    The devices themselves are always kept, and recording carries on from the next
+    ping either way — the two buttons differ only in how much they throw away.</p>
 
   <div id="clear-summary" class="muted" style="font-size:13px;margin-bottom:12px;"></div>
 
-  <button class="btn danger" id="clear-btn">Clear stored data for this site</button>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <button class="btn" id="fails-btn"
+      title="Set every device's running failed-ping total back to zero. Ping history, graphs and events are kept.">Reset failed-ping counters</button>
+    <button class="btn danger" id="clear-btn">Clear stored data for this site</button>
+  </div>
+  <div class="f-help" style="margin-top:8px;">Resetting the counters only zeroes the
+    running totals — useful after a known outage has been dealt with. Clearing stored
+    data also deletes the ping history, graphs and event log.</div>
   <div id="clear-out" class="muted" style="margin-top:10px;font-size:13px;"></div>
 </div>
 {% endblock %}
@@ -156,6 +163,24 @@
         + totalFails + " failed ping event(s) tallied.";
     } catch (e) {}
   }
+
+  document.getElementById("fails-btn").addEventListener("click", async () => {
+    if (!confirm("Reset the failed-ping counter on every device at this site?\n\n"
+                 + "Ping history, graphs and the event log are all kept — only the "
+                 + "running totals go back to zero.")) return;
+    const out = document.getElementById("clear-out");
+    out.textContent = "Resetting…";
+    try {
+      const r = await api("/api/sites/" + SID + "/clear-fails", { method: "POST", body: "{}" });
+      const c = r.cleared || {};
+      out.innerHTML = '<span class="v-good">✓ Reset ' + (c.cleared || 0)
+        + ' failed ping(s) across ' + (c.devices || 0)
+        + ' device(s). History and events kept.</span>';
+      loadSummary();
+    } catch (e) {
+      out.innerHTML = '<span class="v-crit">✗ ' + e.message + '</span>';
+    }
+  });
 
   document.getElementById("clear-btn").addEventListener("click", async () => {
     if (!confirm("Clear ALL stored ping history, events and failed-ping tallies "

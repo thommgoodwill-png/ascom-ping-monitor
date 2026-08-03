@@ -674,6 +674,42 @@ def delete_device(dev_id):
     db.commit()
 
 
+def reset_device_fails(dev_id):
+    """Zero one device's running failed-ping tally and return what it was.
+
+    Deliberately narrower than clear_site_data(): the ping history, the graph
+    and the event log are all left alone, so this only clears the sticky
+    counter without losing the record of what actually happened. Returns None
+    if the device does not exist.
+    """
+    db = get_db()
+    row = db.execute("SELECT fail_total FROM devices WHERE id=?",
+                     (dev_id,)).fetchone()
+    if row is None:
+        return None
+    db.execute("UPDATE devices SET fail_total=0 WHERE id=?", (dev_id,))
+    db.commit()
+    return row["fail_total"] or 0
+
+
+def reset_site_fails(site_id):
+    """Zero the failed-ping tally for every device at a site.
+
+    The site-scoped twin of reset_device_fails() — history and events are kept.
+    Returns how many devices were touched and how many failures were cleared.
+    """
+    db = get_db()
+    rows = db.execute(
+        "SELECT id, fail_total FROM devices WHERE site_id=?", (site_id,)).fetchall()
+    total = sum((r["fail_total"] or 0) for r in rows)
+    hit = [r["id"] for r in rows if (r["fail_total"] or 0) > 0]
+    if hit:
+        ph = ",".join("?" * len(hit))
+        db.execute(f"UPDATE devices SET fail_total=0 WHERE id IN ({ph})", hit)
+        db.commit()
+    return {"devices": len(hit), "cleared": total}
+
+
 def clear_site_data(site_id):
     """Wipe stored ping history, events and the failed-ping tally for every
     device at a site — keeps the devices themselves. Returns rows cleared."""

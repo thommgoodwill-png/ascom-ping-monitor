@@ -296,10 +296,32 @@
         stat("Jitter", s.jitter == null ? '<span class="muted">—</span>' : s.jitter + '<span class="unit"> ms</span>') +
         stat("Loss", s.loss == null ? '<span class="muted">—</span>' :
           '<span class="' + (s.loss > 0 ? "v-crit" : "v-good") + '">' + s.loss + '<span class="unit"> %</span></span>') +
-        stat("Failed pings", '<span class="' + ((s.failed || 0) > 0 ? "v-crit" : "v-good") + '">' + (s.failed || 0) + '</span>') +
+        // "Failed pings" is a running total that never ages out of the window,
+        // so it needs a way back to zero once an outage has been dealt with.
+        // Offered only when there is something to clear.
+        '<div class="stat"><div class="label">Failed pings' +
+          ((s.failed || 0) > 0 ? '<button class="mini-act" id="dd-clear-fails" ' +
+            'title="Reset this counter to zero. The ping history, graph and ' +
+            'event log are all kept.">reset</button>' : '') +
+        '</div><div class="value small"><span class="' +
+          ((s.failed || 0) > 0 ? "v-crit" : "v-good") + '">' + (s.failed || 0) +
+        '</span></div></div>' +
         stat("Outages", s.outage_count) +
         stat("Downtime", fmtDur(s.downtime_s)) +
         stat("Samples", s.sent);
+      const cf = body.querySelector("#dd-clear-fails");
+      if (cf) cf.addEventListener("click", async () => {
+        if (!confirm('Reset the failed-ping counter for "' + dev.name + '" back to zero?\n\n'
+                     + 'The ping history, the graph and the event log are all kept — '
+                     + 'only the running total is cleared.')) return;
+        cf.disabled = true;
+        try {
+          const r = await api("/api/devices/" + devId + "/clear-fails",
+                              { method: "POST", body: "{}" });
+          toast("Counter reset — " + (r.cleared || 0) + " failed ping(s) cleared");
+          load();
+        } catch (e) { cf.disabled = false; toast(e.message, true); }
+      });
       const o = { series: [{ name: dev.name, colorIndex: 0, data: d.series || [] }],
         start: d.start, end: d.end, bucket: d.bucket, warn: d.warn_ms, crit: d.crit_ms,
         height: 220, thresholdColoring: true };
