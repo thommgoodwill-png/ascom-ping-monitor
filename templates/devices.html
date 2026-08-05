@@ -1,11 +1,5 @@
 {% extends "base.html" %}
 {% block content %}
-<style>
-  .drag-grip { cursor:grab; color:var(--muted); font-size:16px; user-select:none;
-    padding:0 4px; display:inline-block; }
-  .drag-grip:active { cursor:grabbing; }
-  #dev-table tbody tr.dragging { opacity:.5; background:var(--surface-2); }
-</style>
 <h1 class="page-title">Devices</h1>
 
 <div class="card">
@@ -71,22 +65,7 @@
 <script>
 (function () {
   "use strict";
-  let dragging = false, dragRow = null;
-
-  function rowAfter(tb, y) {
-    const rows = [...tb.querySelectorAll("tr:not(.dragging)")];
-    let closest = null, closestOffset = -Infinity;
-    for (const r of rows) {
-      const box = r.getBoundingClientRect();
-      const offset = y - box.top - box.height / 2;
-      if (offset < 0 && offset > closestOffset) { closestOffset = offset; closest = r; }
-    }
-    return closest;
-  }
-
-  async function saveOrder() {
-    const tb = document.querySelector("#dev-table tbody");
-    const ids = [...tb.querySelectorAll("tr")].map(tr => tr.dataset.id).filter(Boolean);
+  async function saveOrder(ids) {
     try { await api("/api/devices/reorder", { method: "POST", body: JSON.stringify({ ids }) }); }
     catch (e) { toast(e.message, true); load(); }
   }
@@ -104,8 +83,9 @@
   }
 
   async function load() {
-    if (dragging) return;   // don't rebuild the table mid-drag
+    if (isDragging()) return;   // don't rebuild the table mid-drag
     const data = await api("/api/devices");
+    if (isDragging()) return;   // ...nor when one started while we waited
     const tb = document.querySelector("#dev-table tbody");
     tb.innerHTML = "";
     document.getElementById("dev-empty").style.display =
@@ -118,15 +98,6 @@
       const tdGrip = document.createElement("td");
       const grip = document.createElement("span");
       grip.className = "drag-grip"; grip.textContent = "⠿"; grip.title = "Drag to reorder";
-      grip.draggable = true;
-      grip.addEventListener("dragstart", e => {
-        dragRow = tr; dragging = true; tr.classList.add("dragging");
-        e.dataTransfer.effectAllowed = "move";
-        try { e.dataTransfer.setData("text/plain", d.id); } catch (_) {}
-      });
-      grip.addEventListener("dragend", () => {
-        tr.classList.remove("dragging"); dragging = false; dragRow = null; saveOrder();
-      });
       tdGrip.appendChild(grip); tr.appendChild(tdGrip);
 
       // enabled switch
@@ -236,14 +207,10 @@
     } catch (e) { toast(e.message, true); }
   });
 
-  // reorder: while a row is being dragged, move it under the cursor
-  document.querySelector("#dev-table tbody").addEventListener("dragover", e => {
-    if (!dragRow) return;
-    e.preventDefault(); e.dataTransfer.dropEffect = "move";
-    const tb = e.currentTarget;
-    const after = rowAfter(tb, e.clientY);
-    if (after == null) tb.appendChild(dragRow);
-    else tb.insertBefore(dragRow, after);
+  // reorder: the row itself moves under the cursor (no floating copy — a
+  // detached <tr> has no table to lay itself out in), and the page scrolls
+  makeSortable(document.querySelector("#dev-table tbody"), {
+    item: "tr", axis: "y", float: false, onDrop: saveOrder,
   });
 
   load();

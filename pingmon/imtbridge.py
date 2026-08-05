@@ -50,7 +50,7 @@ from . import database, proc, settings
 log = logging.getLogger("pingmon.imt")
 
 SITE_ID = None   # this reader always represents the LOCAL bridge for this instance
-READER_VERSION = "2.30"  # bump on reader changes so the running build is identifiable
+READER_VERSION = "2.32"  # bump on reader changes so the running build is identifiable
 STATE_PATH = os.path.join(database.DATA_DIR, "imt_state.json")
 
 # A log line starts with "2026-02-11 15:08:31,039 ".

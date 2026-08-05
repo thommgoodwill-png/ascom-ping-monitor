@@ -96,6 +96,17 @@ def init_db():
     _ensure_column(db, "devices", "fail_total", "fail_total INTEGER NOT NULL DEFAULT 0")
     # optional flag colour for the device tile (hex, e.g. #e5484d; NULL = default)
     _ensure_column(db, "devices", "tile_color", "tile_color TEXT")
+    # Devices deleted on the controller that an agent might still re-assert.
+    # Without this, deleting a device does nothing you can see: the agent pushes
+    # its local list up again on its next cycle and the hub obligingly recreates
+    # it. A tombstone makes the deletion win until the agent has caught up (see
+    # agentapi.register_devices, which clears the row once the agent stops
+    # sending the host).
+    db.execute("""CREATE TABLE IF NOT EXISTS deleted_devices (
+        site_id INTEGER NOT NULL,
+        host TEXT NOT NULL,
+        deleted_at REAL NOT NULL,
+        PRIMARY KEY (site_id, host))""")
     db.execute("""CREATE TABLE IF NOT EXISTS known_devices (
         mac TEXT PRIMARY KEY,
         ip TEXT, vendor TEXT, name TEXT,
@@ -668,10 +679,52 @@ def set_device_mac(dev_id, mac, ts):
 
 def delete_device(dev_id):
     db = get_db()
+    row = db.execute("SELECT site_id, host FROM devices WHERE id=?",
+                     (dev_id,)).fetchone()
     db.execute("DELETE FROM devices WHERE id=?", (dev_id,))
     db.execute("DELETE FROM pings WHERE device_id=?", (dev_id,))
     db.execute("DELETE FROM events WHERE device_id=?", (dev_id,))
+    # A device belonging to a site is monitored by that site's agent, which
+    # re-asserts its local list every cycle — so record the deletion, or the
+    # agent simply recreates it and the delete button looks broken. Hub-local
+    # devices (site_id NULL) have no agent arguing with them.
+    if row and row["site_id"] and (row["host"] or "").strip():
+        db.execute("INSERT OR REPLACE INTO deleted_devices(site_id, host, deleted_at)"
+                   " VALUES(?,?,?)",
+                   (row["site_id"], row["host"].strip().lower(), time.time()))
     db.commit()
+
+
+def deleted_hosts(site_id):
+    """Hosts deleted at this site that an agent must not resurrect.
+
+    Maps host -> when it was deleted, so a device the agent created *after*
+    that moment can be told apart from the one that was deleted and let
+    through: same address, but deliberately added again rather than a stale
+    agent re-asserting the old one.
+    """
+    db = get_db()
+    return {r["host"]: r["deleted_at"] for r in db.execute(
+        "SELECT host, deleted_at FROM deleted_devices WHERE site_id=?", (site_id,))}
+
+
+def forget_deleted_hosts(site_id, hosts):
+    """Drop tombstones for these hosts — the deletion has taken effect.
+
+    Called once the agent stops offering a host (it has purged its own copy),
+    or when the host is deliberately added back. Keeping a tombstone beyond
+    that point would silently block a genuine re-add later on.
+    """
+    hosts = [h for h in hosts if h]
+    if not hosts:
+        return 0
+    db = get_db()
+    ph = ",".join("?" * len(hosts))
+    cur = db.execute(
+        f"DELETE FROM deleted_devices WHERE site_id=? AND host IN ({ph})",
+        [site_id] + list(hosts))
+    db.commit()
+    return cur.rowcount
 
 
 def reset_device_fails(dev_id):

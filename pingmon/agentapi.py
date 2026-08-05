@@ -91,8 +91,17 @@ def register_devices(site):
 
     Devices are matched to existing site devices by host (case-insensitive) so
     repeated registration is idempotent — it never creates duplicates. Returns
-    { "id_map": { "<local_id>": <hub_device_id> } } so the agent can tag each
-    local device and then push its ping data under the right hub id.
+    { "id_map": { "<local_id>": <hub_device_id> },
+      "removed": [ <local_id>, ... ] } — id_map lets the agent tag each local
+    device and push its ping data under the right hub id, and removed lists the
+    ones deleted on the controller, which the agent should delete locally too.
+
+    Deleting a device on the controller used to achieve nothing: the row went,
+    then this endpoint recreated it from the agent's next registration seconds
+    later. A device deleted here is tombstoned (database.delete_device), so it
+    is refused rather than recreated, and the agent is told to drop it. The
+    tombstone is cleared as soon as the agent stops offering the host, which
+    keeps a later, deliberate re-add working normally.
     """
     data = request.get_json(force=True, silent=True) or {}
     incoming = data.get("devices") or []
@@ -100,8 +109,12 @@ def register_devices(site):
     existing = {}
     for d in database.list_devices(site_id=site["id"]):
         existing[(d["host"] or "").strip().lower()] = d
+    tombstoned = database.deleted_hosts(site["id"])
 
     id_map = {}
+    removed = []
+    offered = set()
+    settled = set()
     for dev in incoming[:1000]:
         try:
             local_id = int(dev.get("local_id"))
@@ -110,22 +123,47 @@ def register_devices(site):
         host = (dev.get("host") or "").strip()
         if not host:
             continue
+        key = host.lower()
+        offered.add(key)
         name = (str(dev.get("name") or host)).strip()[:120]
         enabled = 1 if dev.get("enabled", 1) else 0
-        row = existing.get(host.lower())
+        try:
+            born = float(dev.get("created_at") or 0)
+        except (TypeError, ValueError):
+            born = 0
+        row = existing.get(key)
         if row:
+            # The host is live on the controller again — someone added it back
+            # deliberately, so any tombstone for it is stale.
+            if key in tombstoned:
+                settled.add(key)
             hub_id = row["id"]
             database.update_device(hub_id, name=name, enabled=enabled)
+        elif key in tombstoned and born <= tombstoned[key]:
+            # Deleted here and the agent is still offering the same device.
+            # A device created on the agent AFTER the deletion is a deliberate
+            # re-add and falls through to the branch below instead.
+            removed.append(local_id)
+            continue
         else:
+            if key in tombstoned:
+                settled.add(key)
             hub_id = database.add_device(name, host, enabled, site_id=site["id"])
-            existing[host.lower()] = database.get_device(hub_id)
+            existing[key] = database.get_device(hub_id)
         id_map[str(local_id)] = hub_id
+
+    # Retire tombstones the agent has acted on (host no longer offered) and any
+    # the operator has overridden by re-adding the device on the controller.
+    settled |= (set(tombstoned) - offered)
+    if settled:
+        database.forget_deleted_hosts(site["id"], settled)
 
     database.touch_site(site["id"], agent_version=data.get("version"),
                         agent_host=data.get("host"))
-    log.info("site %s: registered/updated %d devices from agent",
-             site["id"], len(id_map))
-    return jsonify(ok=True, id_map=id_map)
+    log.info("site %s: registered/updated %d devices from agent%s",
+             site["id"], len(id_map),
+             ", %d awaiting local removal" % len(removed) if removed else "")
+    return jsonify(ok=True, id_map=id_map, removed=removed)
 
 
 @bp.route("/report", methods=["POST"])

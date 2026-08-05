@@ -83,6 +83,221 @@
     }).catch(() => {});
   });
 
+  // ---- drag to reorder ------------------------------------------------
+  // Pointer-based, deliberately NOT the browser's native drag-and-drop.
+  // Native DnD has two flaws that made reordering panels feel broken:
+  //   * the page will not scroll during a drag — neither the wheel nor the
+  //     window edge — so anything below the fold simply cannot be reached;
+  //   * the drag aborts the moment the dragged node is touched by script,
+  //     which the 15 s auto-refresh does on every cycle.
+  // Pointer events avoid both, and work with touch and pen as well as a mouse.
+  //
+  // isDragging() is the interlock the pages use to hold their refresh off
+  // while a drag is in flight, including any request already in the air.
+  let dragDepth = 0;
+  window.isDragging = function () { return dragDepth > 0; };
+
+  window.makeSortable = function (container, opts) {
+    opts = opts || {};
+    const HANDLE = opts.handle || ".drag-grip";
+    const ITEM = opts.item || ".card";
+    const AXIS = opts.axis || "grid";        // "grid" = 2-D tiles, "y" = rows
+    const FLOAT = opts.float !== false;      // lift the item out of flow
+    const EDGE = 76;                         // auto-scroll zone, px
+    const MAXV = 26;                         // auto-scroll speed, px/frame
+    const START = 4;                         // movement before a drag begins
+
+    let item = null, slot = null, home = null, pid = null;
+    let sx = 0, sy = 0, gx = 0, gy = 0, px = 0, py = 0;
+    let live = false, raf = 0, cfx = 0, cfy = 0, scroller = null;
+
+    function others() {
+      return Array.prototype.filter.call(container.children, el =>
+        el !== item && el !== slot && el.matches && el.matches(ITEM));
+    }
+
+    // The element the slot should sit BEFORE (null = append at the end).
+    function target() {
+      const list = others();
+      if (!list.length) return null;
+      if (AXIS === "y") {
+        for (const el of list) {
+          const b = el.getBoundingClientRect();
+          if (py < b.top + b.height / 2) return el;
+        }
+        return null;
+      }
+      // closest centre, biased vertically so grid rows are respected
+      let best = null, bestD = Infinity, before = true;
+      for (const el of list) {
+        const b = el.getBoundingClientRect();
+        const mx = b.left + b.width / 2, my = b.top + b.height / 2, dy = py - my;
+        const d = Math.hypot(px - mx, dy * 1.4);
+        if (d < bestD) {
+          bestD = d; best = el;
+          before = Math.abs(dy) > b.height / 2 ? dy < 0 : px < mx;
+        }
+      }
+      return before ? best : best.nextElementSibling;
+    }
+
+    function place() {
+      if (!slot) return;
+      const ref = target();
+      if (ref === slot) return;
+      if (ref == null) {
+        if (container.lastElementChild !== slot) container.appendChild(slot);
+      } else if (slot.nextElementSibling !== ref) {
+        container.insertBefore(slot, ref);
+      }
+    }
+
+    function moveTo() {
+      if (!FLOAT) return;
+      item.style.left = (px - gx + cfx) + "px";
+      item.style.top = (py - gy + cfy) + "px";
+    }
+
+    // Nearest ancestor that actually scrolls, so a panel inside a scrolling
+    // pane auto-scrolls that pane rather than the window behind it.
+    function scrollableAncestor(el) {
+      for (let p = el.parentElement; p; p = p.parentElement) {
+        const oy = getComputedStyle(p).overflowY;
+        if ((oy === "auto" || oy === "scroll") && p.scrollHeight > p.clientHeight + 2)
+          return p;
+      }
+      return null;
+    }
+
+    function tick() {
+      raf = 0;
+      if (!live) return;
+      const el = scroller || document.scrollingElement || document.documentElement;
+      const b = scroller ? scroller.getBoundingClientRect()
+                         : { top: 0, bottom: window.innerHeight };
+      let v = 0;
+      if (py < b.top + EDGE) v = -MAXV * Math.min(1, (b.top + EDGE - py) / EDGE);
+      else if (py > b.bottom - EDGE) v = MAXV * Math.min(1, (py - (b.bottom - EDGE)) / EDGE);
+      if (v) {
+        const was = el.scrollTop;
+        el.scrollTop = was + (v < 0 ? Math.floor(v) : Math.ceil(v));
+        if (el.scrollTop !== was) place();     // the panels moved under us
+      }
+      raf = requestAnimationFrame(tick);
+    }
+
+    function begin() {
+      const r = item.getBoundingClientRect();
+      gx = sx - r.left; gy = sy - r.top;
+      home = item.nextElementSibling;
+      if (FLOAT) {
+        // A plain placeholder holds the grid slot open. The dragged panel
+        // itself is lifted to position:fixed rather than cloned, so its
+        // canvas keeps its rendered chart instead of coming out blank.
+        slot = document.createElement(item.tagName);
+        slot.className = opts.placeholder || "card drag-ph";
+        slot.style.height = r.height + "px";
+        container.insertBefore(slot, item);
+        item.classList.add("drag-live");
+        item.style.width = r.width + "px";
+        item.style.height = r.height + "px";
+        item.style.margin = "0";
+        item.style.position = "fixed";
+        item.style.zIndex = "900";
+        item.style.left = r.left + "px";
+        item.style.top = r.top + "px";
+        // a transformed ancestor would make "fixed" relative to itself;
+        // measure once and carry the difference rather than assume it can't
+        const r2 = item.getBoundingClientRect();
+        cfx = r.left - r2.left; cfy = r.top - r2.top;
+        moveTo();
+      } else {
+        slot = item;                      // rows just move in place
+        item.classList.add("dragging");
+      }
+      live = true;
+      dragDepth++;
+      document.body.classList.add("dragging-active");
+      window.addEventListener("scroll", place, true);
+      raf = requestAnimationFrame(tick);
+    }
+
+    function ids() {
+      return Array.prototype.map.call(container.children,
+        el => el.dataset && el.dataset.id).filter(Boolean);
+    }
+
+    function finish(commit) {
+      detach();
+      if (!live) { item = null; return; }
+      live = false;
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+      window.removeEventListener("scroll", place, true);
+      const back = (home && home.parentNode === container) ? home : null;
+      if (FLOAT) {
+        item.classList.remove("drag-live");
+        for (const p of ["width", "height", "margin", "position", "zIndex", "left", "top"])
+          item.style[p] = "";
+        container.insertBefore(item, commit ? slot : back);
+        slot.remove();
+      } else {
+        item.classList.remove("dragging");
+        if (!commit) container.insertBefore(item, back);
+      }
+      slot = null;
+      document.body.classList.remove("dragging-active");
+      dragDepth = Math.max(0, dragDepth - 1);
+      const moved = item;
+      item = null;
+      if (commit && opts.onDrop) opts.onDrop(ids(), moved);
+    }
+
+    function onMove(e) {
+      if (!item || e.pointerId !== pid) return;
+      px = e.clientX; py = e.clientY;
+      if (!live) {
+        if (Math.abs(px - sx) < START && Math.abs(py - sy) < START) return;
+        begin();
+      }
+      moveTo();
+      place();
+      e.preventDefault();
+    }
+    function onUp(e) { if (!e || e.pointerId === pid) finish(true); }
+    function onCancel(e) { if (!e || e.pointerId === pid) finish(false); }
+    function onKey(e) { if (e.key === "Escape") finish(false); }
+
+    function detach() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("keydown", onKey);
+    }
+
+    container.addEventListener("pointerdown", e => {
+      if (e.button != null && e.button !== 0) return;
+      if (item) return;
+      const h = e.target.closest && e.target.closest(HANDLE);
+      if (!h || !container.contains(h)) return;
+      const it = h.closest(ITEM);
+      if (!it || it.parentElement !== container) return;
+      item = it; pid = e.pointerId;
+      sx = px = e.clientX; sy = py = e.clientY;
+      scroller = scrollableAncestor(container);
+      // window-level listeners rather than pointer capture: the panel moves
+      // out from under the cursor, and capture on a node we then restyle is
+      // the sort of thing browsers disagree about.
+      window.addEventListener("pointermove", onMove, { passive: false });
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onCancel);
+      window.addEventListener("keydown", onKey);
+      e.preventDefault();     // no text selection, no native image drag
+    });
+
+    return { isDragging: () => live };
+  };
+
   window.latClass = function (v, warn, crit) {
     if (v == null) return "";
     if (v > crit) return "v-crit";

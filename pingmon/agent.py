@@ -18,7 +18,7 @@ from . import database, settings
 
 log = logging.getLogger("pingmon.agent")
 
-AGENT_VERSION = "1.4"   # 1.4 = also push IMT bridge faults up to the hub
+AGENT_VERSION = "1.5"   # 1.5 = honours device deletions made on the controller
 # When (re)connecting with a big unsent backlog, only push pings from the last
 # this-many seconds; older queued pings are skipped rather than replayed.
 BACKFILL_WINDOW = 900   # 15 minutes
@@ -197,18 +197,28 @@ class Agent:
         Every agent-owned device (from_hub falsy) is re-asserted each cycle.
         The hub matches by host and returns the current hub id, so this is
         idempotent AND self-healing: if the site was recreated or a device's
-        old link went stale, the hub id is simply refreshed to the live one."""
+        old link went stale, the hub id is simply refreshed to the live one.
+
+        The hub also replies with 'removed' — local ids it has deleted its side
+        and refuses to recreate. Those are deleted here too, otherwise deleting
+        a device on the controller would be a tug of war we re-assert our way
+        every cycle, and the agent would keep pinging a device nobody wants.
+
+        created_at goes up with each device so the hub can tell a device added
+        here after a deletion from the deleted one coming back — same address,
+        but a deliberate re-add, which it should accept rather than refuse.
+
+        An empty list is still sent: it is how the hub learns we have acted on
+        a removal, and it keeps the site's last-seen time fresh on an agent that
+        happens to own no devices of its own."""
         owned = [d for d in database.list_devices() if not d.get("from_hub")]
-        if not owned:
-            return
         payload = {
             "version": AGENT_VERSION, "host": self._hostname(),
             "devices": [{"local_id": d["id"], "name": d["name"],
-                         "host": d["host"], "enabled": d["enabled"]}
+                         "host": d["host"], "enabled": d["enabled"],
+                         "created_at": d.get("created_at")}
                         for d in owned if d.get("host")],
         }
-        if not payload["devices"]:
-            return
         resp = _post(f"{c['hub_url']}/agent/v1/devices", c["site_key"], payload,
                      insecure=c.get("insecure", False))
         id_map = resp.get("id_map") or {}
@@ -223,13 +233,31 @@ class Agent:
             if cur and cur.get("hub_id") != hid:
                 database.update_device(lid, hub_id=hid)
             tagged += 1
-        log.info("agent asserted %d local device(s) to the hub", tagged)
+        # devices the operator deleted on the controller: honour it locally
+        dropped = 0
+        ours = {d["id"] for d in owned}
+        for lid in (resp.get("removed") or []):
+            try:
+                lid = int(lid)
+            except (TypeError, ValueError):
+                continue
+            # only ever delete a device we ourselves just offered, so a bad or
+            # stale reply can never reach into the rest of the local config
+            if lid in ours and database.get_device(lid):
+                database.delete_device(lid)
+                dropped += 1
+        log.info("agent asserted %d local device(s) to the hub%s", tagged,
+                 ", deleted %d removed on the controller" % dropped if dropped else "")
 
     def _sync_config(self, c):
         """Pull any hub-defined devices for this site and mirror them into the
-        local DB so the normal monitor pings them too. Non-destructive: devices
-        added on this agent (and pushed up via _register_local) are never
-        removed here — only pure hub-side mirrors are updated."""
+        local DB so the normal monitor pings them too.
+
+        Devices added on this agent (and pushed up via _register_local) are
+        never touched here — only pure hub-side mirrors (from_hub=1). A mirror
+        whose hub device has been deleted is deleted locally as well: it exists
+        solely to reflect the hub, so keeping it would leave the agent pinging a
+        device that no longer appears anywhere in the controller."""
         url = f"{c['hub_url']}/agent/v1/config?v={AGENT_VERSION}&host={self._hostname()}"
         cfg = _get(url, c["site_key"], insecure=c.get("insecure", False))
         wanted = {int(d["id"]): d for d in cfg.get("devices", [])}
@@ -252,6 +280,12 @@ class Agent:
                 database.update_device(new_id, hub_id=hub_id, from_hub=1, **{
                     k: v for k, v in fields.items()
                     if k in ("warn_override", "crit_override", "tcp_ports", "check_url")})
+        # retire mirrors of hub devices that no longer exist
+        for hub_id, d in local.items():
+            if hub_id not in wanted and d.get("from_hub"):
+                database.delete_device(d["id"])
+                log.info("agent removed mirror of deleted hub device %s (%s)",
+                         hub_id, d.get("host"))
 
     def _push_imt(self, c):
         """Push the IMT bridge faults this agent read locally up to the hub, so

@@ -320,3 +320,25 @@ h1.page-title { font-size: 20px; margin: 0 0 16px; }
 /* ---------- footer build tag ---------- */
 .app-foot { text-align: center; padding: 18px 0 26px; font-size: 12px; }
 .app-foot .muted { opacity: .7; }
+
+/* ---------- drag to reorder ---------- */
+.drag-grip {
+  cursor: grab; color: var(--muted); font-size: 16px; line-height: 1;
+  user-select: none; -webkit-user-select: none;
+  touch-action: none;            /* let a touch drag the panel, not the page */
+  padding: 0 4px; display: inline-block;
+}
+.drag-grip:hover { color: var(--text); }
+.drag-grip:active { cursor: grabbing; }
+body.dragging-active { user-select: none; -webkit-user-select: none; cursor: grabbing; }
+/* the panel being carried: lifted out of flow, follows the cursor */
+.card.drag-live {
+  box-shadow: 0 18px 44px rgba(0, 0, 0, .34);
+  transform: scale(1.015); opacity: .97; transition: none;
+}
+/* the gap it will drop into */
+.drag-ph {
+  border: 2px dashed var(--ascom); border-radius: 10px;
+  background: var(--surface-2); box-shadow: none; opacity: .55;
+}
+tr.dragging { opacity: .5; background: var(--surface-2); }

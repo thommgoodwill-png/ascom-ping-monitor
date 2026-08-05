@@ -65,6 +65,9 @@
 
   async function loadDevices() {
     const data = await api("/api/devices");
+    // a drag started while this was in the air — rebuilding the panels now
+    // would pull the one being carried out from under the cursor
+    if (isDragging()) return null;
     window._warn = data.warn_ms; window._crit = data.crit_ms;
     document.querySelectorAll(".warn-val").forEach(e => e.textContent = data.warn_ms);
     document.querySelectorAll(".crit-val").forEach(e => e.textContent = data.crit_ms);
@@ -87,7 +90,9 @@
         card.id = "dev-" + d.id;
         card.dataset.id = d.id;
         card.innerHTML =
-          '<div class="dev-head"><span class="pill unknown"></span>' +
+          '<div class="dev-head">' +
+          '<span class="drag-grip" title="Drag to reorder">⠿</span>' +
+          '<span class="pill unknown"></span>' +
           '<span class="name device-clickable" title="Open detailed view"></span><span class="host"></span>' +
           '<button class="btn small tile-edit" style="margin-left:auto;" title="Edit device">Edit</button></div>' +
           '<div class="stats"></div><div class="mini-chart"></div>';
@@ -97,8 +102,9 @@
           e.stopPropagation();
           const dd = byId[theCard.dataset.id]; if (dd) deviceEditModal(dd, loadDevices);
         });
-        card.querySelector(".name").addEventListener("click", () =>
-          deviceDetailModal(theCard.dataset.id));
+        card.querySelector(".name").addEventListener("click", () => {
+          if (!isDragging()) deviceDetailModal(theCard.dataset.id);
+        });
       }
       const [cls, label] = pillFor(d);
       const pill = card.querySelector(".pill");
@@ -145,16 +151,23 @@
         checksBox.appendChild(pill);
       }
     }
-    // remove cards for deleted devices
+    // remove cards for deleted devices (never the drag placeholder)
     const ids = new Set(data.devices.map(d => "dev-" + d.id));
     for (const el of Array.from(grid.children)) {
-      if (!ids.has(el.id)) { el.remove(); }
+      if (!el.classList.contains("drag-ph") && !ids.has(el.id)) el.remove();
+    }
+    // reflect the saved order — panels created on an earlier cycle would
+    // otherwise keep the order they were first added in
+    if (!isDragging()) for (const d of data.devices) {
+      const card = document.getElementById("dev-" + d.id);
+      if (card) grid.appendChild(card);
     }
     return data;
   }
 
   async function loadHistory() {
     const h = await api("/api/history?seconds=" + rangeSec);
+    if (isDragging()) return;      // don't redraw a panel that's being moved
     const devs = h.devices;
     // overview: one series per device, categorical colors in fixed device order
     const series = devs.map((d, i) => ({
@@ -208,8 +221,9 @@
   }
 
   async function refresh() {
+    if (isDragging()) return;
     try {
-      await loadDevices();
+      if (!await loadDevices()) return;
       await loadHistory();
       document.getElementById("refresh-note").textContent =
         refreshSeconds > 0 ? "auto-refresh " + refreshSeconds + "s" : "auto-refresh off";
@@ -217,6 +231,14 @@
       if (e.message !== "auth") toast("Refresh failed: " + e.message, true);
     }
   }
+
+  makeSortable(document.getElementById("device-grid"), {
+    item: ".card",
+    onDrop: async ids => {
+      try { await api("/api/devices/reorder", { method: "POST", body: JSON.stringify({ ids }) }); }
+      catch (e) { toast(e.message, true); }
+    },
+  });
 
   document.getElementById("range-group").addEventListener("click", ev => {
     const btn = ev.target.closest(".range-btn");
