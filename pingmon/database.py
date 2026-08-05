@@ -18,6 +18,12 @@ def _default_data_dir():
 DATA_DIR = os.environ.get("PINGMON_DATA") or _default_data_dir()
 DB_PATH = os.path.join(DATA_DIR, "pingmon.db")
 
+# deleted_devices.site_id normally names the site whose agent must not bring a
+# device back. On an agent there are no sites, so this reserved value stands for
+# "the controller" — the deletions this agent has to push UP. Real site ids are
+# AUTOINCREMENT and start at 1, so 0 can never collide with one.
+HUB_SITE = 0
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS devices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -679,19 +685,28 @@ def set_device_mac(dev_id, mac, ts):
 
 def delete_device(dev_id):
     db = get_db()
-    row = db.execute("SELECT site_id, host FROM devices WHERE id=?",
+    row = db.execute("SELECT site_id, host, hub_id FROM devices WHERE id=?",
                      (dev_id,)).fetchone()
     db.execute("DELETE FROM devices WHERE id=?", (dev_id,))
     db.execute("DELETE FROM pings WHERE device_id=?", (dev_id,))
     db.execute("DELETE FROM events WHERE device_id=?", (dev_id,))
+    host = (row["host"] or "").strip().lower() if row else ""
     # A device belonging to a site is monitored by that site's agent, which
     # re-asserts its local list every cycle — so record the deletion, or the
     # agent simply recreates it and the delete button looks broken. Hub-local
     # devices (site_id NULL) have no agent arguing with them.
-    if row and row["site_id"] and (row["host"] or "").strip():
+    if row and row["site_id"] and host:
         db.execute("INSERT OR REPLACE INTO deleted_devices(site_id, host, deleted_at)"
                    " VALUES(?,?,?)",
-                   (row["site_id"], row["host"].strip().lower(), time.time()))
+                   (row["site_id"], host, time.time()))
+    # The mirror image, on an agent: hub_id means the controller knows about
+    # this device, and the controller pushes its list down every cycle — so
+    # without a record of the deletion the device reappears within seconds.
+    # The tombstone both suppresses it locally and is what gets sent up so the
+    # controller deletes its copy. It is cleared once the controller confirms.
+    if row and row["hub_id"] and host:
+        db.execute("INSERT OR REPLACE INTO deleted_devices(site_id, host, deleted_at)"
+                   " VALUES(?,?,?)", (HUB_SITE, host, time.time()))
     db.commit()
 
 
@@ -706,6 +721,26 @@ def deleted_hosts(site_id):
     db = get_db()
     return {r["host"]: r["deleted_at"] for r in db.execute(
         "SELECT host, deleted_at FROM deleted_devices WHERE site_id=?", (site_id,))}
+
+
+def deleted_hub_hosts():
+    """Agent side: hosts deleted here that the controller has not yet been told
+    about (or has not confirmed).  Maps host -> when it was deleted.
+
+    Until the controller acknowledges one of these, the agent must not mirror a
+    device with that host back down again — otherwise deleting a device on the
+    agent looks like it does nothing, because the next config pull recreates it.
+    """
+    return deleted_hosts(HUB_SITE)
+
+
+def forget_deleted_hub_hosts(hosts):
+    """Drop agent-side tombstones the controller has confirmed it has acted on.
+
+    Clearing them matters: a tombstone left behind would silently block the
+    same host from ever being deployed from the controller again.
+    """
+    return forget_deleted_hosts(HUB_SITE, hosts)
 
 
 def forget_deleted_hosts(site_id, hosts):

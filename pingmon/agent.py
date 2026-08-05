@@ -18,7 +18,7 @@ from . import database, settings
 
 log = logging.getLogger("pingmon.agent")
 
-AGENT_VERSION = "1.5"   # 1.5 = honours device deletions made on the controller
+AGENT_VERSION = "1.6"   # 1.6 = device deletions travel both ways (1.5: hub -> agent)
 # When (re)connecting with a big unsent backlog, only push pings from the last
 # this-many seconds; older queued pings are skipped rather than replayed.
 BACKFILL_WINDOW = 900   # 15 minutes
@@ -208,16 +208,26 @@ class Agent:
         here after a deletion from the deleted one coming back — same address,
         but a deliberate re-add, which it should accept rather than refuse.
 
+        Deletions travel UP as well as down. When a device is deleted here the
+        controller still has its copy and would push it straight back, so the
+        deletion is recorded locally (database.delete_device) and every one of
+        those tombstones is sent with this call for the controller to apply.
+        Only an explicit tombstone is ever sent — a device that is merely absent
+        says nothing — so a rebuilt or restored agent cannot wipe the
+        controller's device list simply by starting up with an empty database.
+
         An empty list is still sent: it is how the hub learns we have acted on
         a removal, and it keeps the site's last-seen time fresh on an agent that
         happens to own no devices of its own."""
         owned = [d for d in database.list_devices() if not d.get("from_hub")]
+        gone = database.deleted_hub_hosts()
         payload = {
             "version": AGENT_VERSION, "host": self._hostname(),
             "devices": [{"local_id": d["id"], "name": d["name"],
                          "host": d["host"], "enabled": d["enabled"],
                          "created_at": d.get("created_at")}
                         for d in owned if d.get("host")],
+            "deleted": [{"host": h, "at": ts} for h, ts in gone.items()],
         }
         resp = _post(f"{c['hub_url']}/agent/v1/devices", c["site_key"], payload,
                      insecure=c.get("insecure", False))
@@ -246,8 +256,14 @@ class Agent:
             if lid in ours and database.get_device(lid):
                 database.delete_device(lid)
                 dropped += 1
-        log.info("agent asserted %d local device(s) to the hub%s", tagged,
-                 ", deleted %d removed on the controller" % dropped if dropped else "")
+        # deletions made here that the controller has now applied: drop the
+        # tombstone, so the same host can be deployed again later
+        done = [h for h in (resp.get("deleted_ok") or []) if isinstance(h, str)]
+        if done:
+            database.forget_deleted_hub_hosts([h.strip().lower() for h in done])
+        log.info("agent asserted %d local device(s) to the hub%s%s", tagged,
+                 ", deleted %d removed on the controller" % dropped if dropped else "",
+                 ", controller applied %d local deletion(s)" % len(done) if done else "")
 
     def _sync_config(self, c):
         """Pull any hub-defined devices for this site and mirror them into the
@@ -257,10 +273,17 @@ class Agent:
         never touched here — only pure hub-side mirrors (from_hub=1). A mirror
         whose hub device has been deleted is deleted locally as well: it exists
         solely to reflect the hub, so keeping it would leave the agent pinging a
-        device that no longer appears anywhere in the controller."""
+        device that no longer appears anywhere in the controller.
+
+        A device deleted here is skipped until the controller confirms it has
+        deleted its own copy. Without that, this method is exactly what made
+        deleting a device on an agent appear to do nothing: the row went, and
+        the very next config pull — seconds later — put it straight back."""
         url = f"{c['hub_url']}/agent/v1/config?v={AGENT_VERSION}&host={self._hostname()}"
         cfg = _get(url, c["site_key"], insecure=c.get("insecure", False))
-        wanted = {int(d["id"]): d for d in cfg.get("devices", [])}
+        pending = database.deleted_hub_hosts()
+        wanted = {int(d["id"]): d for d in cfg.get("devices", [])
+                  if (d.get("host") or "").strip().lower() not in pending}
         # index local devices already linked to a hub device
         local = {d["hub_id"]: d for d in database.list_devices()
                  if d.get("hub_id")}

@@ -65,6 +65,10 @@
 <script>
 (function () {
   "use strict";
+  // On a site agent a deletion is passed up to the controller, so the device
+  // goes from both. Say so rather than let it come as a surprise.
+  const IS_AGENT = {{ 'true' if is_agent else 'false' }};
+
   async function saveOrder(ids) {
     try { await api("/api/devices/reorder", { method: "POST", body: JSON.stringify({ ids }) }); }
     catch (e) { toast(e.message, true); load(); }
@@ -174,7 +178,10 @@
       del.style.marginLeft = "6px";
       del.textContent = "Delete";
       del.addEventListener("click", async () => {
-        if (!confirm('Delete "' + d.name + '" and all of its history?')) return;
+        const msg = 'Delete "' + d.name + '" and all of its history?' +
+          (IS_AGENT ? "\n\nThis is a site agent, so the device will also be "
+                    + "removed from the controller." : "");
+        if (!confirm(msg)) return;
         try { await api("/api/devices/" + d.id, { method: "DELETE" }); load(); }
         catch (e) { toast(e.message, true); }
       });

@@ -87,7 +87,8 @@ def register_devices(site):
 
     Body: { "version": "..", "host": "..",
             "devices": [ {"local_id": 3, "name": "Gateway", "host": "192.168.0.1",
-                          "enabled": true}, ... ] }
+                          "enabled": true}, ... ],
+            "deleted": [ {"host": "192.168.0.9", "at": 1750000000.0}, ... ] }
 
     Devices are matched to existing site devices by host (case-insensitive) so
     repeated registration is idempotent — it never creates duplicates. Returns
@@ -102,9 +103,37 @@ def register_devices(site):
     is refused rather than recreated, and the agent is told to drop it. The
     tombstone is cleared as soon as the agent stops offering the host, which
     keeps a later, deliberate re-add working normally.
+
+    'deleted' carries the same thing in the other direction — devices the
+    operator deleted on the agent itself. The controller holds the master copy
+    and pushes it back down every cycle, so a deletion made at the agent has to
+    be applied here or it simply undoes itself. Each host is echoed back in
+    'deleted_ok' so the agent knows it has been applied and can drop its own
+    record of it. A host the agent is still offering wins over its own stale
+    tombstone: that is a device deliberately added back after the deletion.
     """
     data = request.get_json(force=True, silent=True) or {}
     incoming = data.get("devices") or []
+    offered = {(d.get("host") or "").strip().lower()
+               for d in incoming if isinstance(d, dict)}
+
+    # ---- deletions made on the agent, applied here first so the rest of this
+    # request sees the site as it now stands
+    deleted_ok = []
+    for item in (data.get("deleted") or [])[:1000]:
+        host = (item.get("host") or "").strip().lower() \
+            if isinstance(item, dict) else str(item or "").strip().lower()
+        if not host:
+            continue
+        deleted_ok.append(host)          # acknowledged either way, so it clears
+        if host in offered:
+            continue                     # added back since — nothing to delete
+        for d in database.list_devices(site_id=site["id"]):
+            if (d["host"] or "").strip().lower() == host:
+                database.delete_device(d["id"])
+                log.info("site %s: deleted device %s (%s) — deleted on the agent",
+                         site["id"], d["id"], host)
+
     # existing site devices indexed by normalised host
     existing = {}
     for d in database.list_devices(site_id=site["id"]):
@@ -113,7 +142,6 @@ def register_devices(site):
 
     id_map = {}
     removed = []
-    offered = set()
     settled = set()
     for dev in incoming[:1000]:
         try:
@@ -124,7 +152,6 @@ def register_devices(site):
         if not host:
             continue
         key = host.lower()
-        offered.add(key)
         name = (str(dev.get("name") or host)).strip()[:120]
         enabled = 1 if dev.get("enabled", 1) else 0
         try:
@@ -160,10 +187,12 @@ def register_devices(site):
 
     database.touch_site(site["id"], agent_version=data.get("version"),
                         agent_host=data.get("host"))
-    log.info("site %s: registered/updated %d devices from agent%s",
+    log.info("site %s: registered/updated %d devices from agent%s%s",
              site["id"], len(id_map),
-             ", %d awaiting local removal" % len(removed) if removed else "")
-    return jsonify(ok=True, id_map=id_map, removed=removed)
+             ", %d awaiting local removal" % len(removed) if removed else "",
+             ", %d deleted at the agent" % len(deleted_ok) if deleted_ok else "")
+    return jsonify(ok=True, id_map=id_map, removed=removed,
+                   deleted_ok=deleted_ok)
 
 
 @bp.route("/report", methods=["POST"])

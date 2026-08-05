@@ -23,7 +23,7 @@ log = logging.getLogger("pingmon.app")
 emailer = Emailer()
 webhooks = Webhooks()
 monitor = Monitor(emailer, webhooks)
-from .agent import Agent  # noqa: E402
+from .agent import Agent, load_conf as agent_conf  # noqa: E402
 agent = Agent(monitor)
 from .feed import CallFeed  # noqa: E402
 feed = CallFeed()
@@ -127,6 +127,9 @@ def create_app():
         # fetch the new JS/CSS after a deploy instead of serving a stale cache
         from . import imtbridge as _ib
         ctx["asset_ver"] = _ib.READER_VERSION
+        # this install is a site agent reporting to a controller — pages use it
+        # to say so where an action here also affects the controller
+        ctx["is_agent"] = bool(agent_conf().get("enabled"))
         return ctx
 
     from .agentapi import bp as agent_bp
