@@ -79,3 +79,11 @@ Set before launching, or in the scheduled task:
   (tick "Install Npcap in WinPcap API-compatible mode"). Without it the Capture
   page reports the engine as unavailable; ping/monitoring still work fine.
   The exe must run **as Administrator** to capture.
+- **File servers (Tools → File servers)** are off by default. Default ports are
+  8081 (HTTP), 8443 (HTTPS), 21 (FTP) and 69 (TFTP); files live in
+  `C:\ProgramData\AscomPingMonitor\fileserver`. FTP 21 and TFTP 69 are
+  privileged ports, so the exe must run **as Administrator** to bind them —
+  otherwise move them above 1024 (e.g. 2121 and 6969) and point the devices
+  there. `install-startup.bat` opens the GUI port in Windows Firewall; add a
+  rule for each file-server port you switch on, including the FTP passive range
+  (50000–50100 by default), or transfers will connect and then hang.

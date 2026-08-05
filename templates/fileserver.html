@@ -1,0 +1,477 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="page-title">File servers</h1>
+
+<div class="card" style="border-left:3px solid var(--warn);">
+  <p style="margin:0;font-size:13px;">
+    <b>What this is for:</b> handsets, IP-DECT bases and gateways pull firmware
+    and configuration files from a server on site. This serves one folder over
+    whichever of <b>HTTP, HTTPS, FTP</b> and <b>TFTP</b> you switch on, so you
+    don't have to stand up a separate server to commission or upgrade kit.
+    Everything is <b>off by default</b>, and letting devices <b>write</b> files
+    back is a separate switch per protocol.
+  </p>
+</div>
+
+<div class="card">
+  <h2>Servers</h2>
+  <p class="card-sub">Turn on only what the devices on this site actually need.
+    Ports below 1024 (FTP 21, TFTP 69) need the service to run as
+    Administrator on Windows or root on Linux — if a server won't start, the
+    reason is shown against it.</p>
+  <table class="list" id="fs-status">
+    <thead>
+      <tr><th>Protocol</th><th>Port</th><th>Uploads</th><th>State</th><th>Address for devices</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+  <p class="muted" id="fs-addr-note" style="margin-top:10px;"></p>
+</div>
+
+{% if is_admin %}
+<div class="card">
+  <h2>Shared folder</h2>
+  <div class="f-row">
+    <div style="flex:2;">
+      <label class="f-label" for="fs_root">Folder to serve</label>
+      <input type="text" id="fs_root" placeholder="">
+      <div class="f-help">Leave blank to use the default inside the data
+        directory. Every protocol serves this same folder, and nothing outside
+        it can ever be reached.</div>
+    </div>
+    <div>
+      <label class="f-label" for="fs_bind">Listen on</label>
+      <input type="text" id="fs_bind" placeholder="0.0.0.0">
+      <div class="f-help">0.0.0.0 = every network interface. Set a specific IP
+        to keep the servers off other networks this machine is on.</div>
+    </div>
+    <div>
+      <label class="f-label" for="fs_max_upload_mb">Max upload size (MB)</label>
+      <input type="number" id="fs_max_upload_mb" min="1" max="10240">
+      <div class="f-help">Applies to anything written to us, over any protocol.</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>HTTP</h2>
+  <p class="card-sub">Plain HTTP. Simplest thing for a device to fetch a
+    firmware file from, and what most newer kit expects.</p>
+  <div class="f-row">
+    <div><label class="f-label">Enabled</label>
+      <label class="switch"><input type="checkbox" id="fs_http_enabled"><span class="track"></span></label></div>
+    <div><label class="f-label" for="fs_http_port">Port</label>
+      <input type="number" id="fs_http_port" min="1" max="65535">
+      <div class="f-help">Not 8080 — the GUI you're looking at owns that.</div></div>
+    <div><label class="f-label">Allow uploads</label>
+      <label class="switch"><input type="checkbox" id="fs_http_upload"><span class="track"></span></label>
+      <div class="f-help">Permits PUT and POST writes into the folder.</div></div>
+    <div><label class="f-label" for="fs_http_user">Username <span class="muted">(optional)</span></label>
+      <input type="text" id="fs_http_user" autocomplete="off">
+      <div class="f-help">Blank = no login required. Shared with HTTPS.</div></div>
+    <div><label class="f-label" for="fs_http_pass">Password</label>
+      <input type="password" id="fs_http_pass" autocomplete="new-password"></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>HTTPS</h2>
+  <p class="card-sub">The same content over TLS, on its own port, using the
+    HTTP username and password above.</p>
+  <div class="f-row">
+    <div><label class="f-label">Enabled</label>
+      <label class="switch"><input type="checkbox" id="fs_https_enabled"><span class="track"></span></label></div>
+    <div><label class="f-label" for="fs_https_port">Port</label>
+      <input type="number" id="fs_https_port" min="1" max="65535"></div>
+    <div><label class="f-label">Allow uploads</label>
+      <label class="switch"><input type="checkbox" id="fs_https_upload"><span class="track"></span></label></div>
+    <div style="flex:2;"><label class="f-label" for="fs_https_cert">Certificate file <span class="muted">(optional)</span></label>
+      <input type="text" id="fs_https_cert" placeholder="leave blank to self-sign">
+      <div class="f-help">Blank generates a self-signed certificate once and
+        reuses it. Devices on a commissioning LAN won't be validating it.</div></div>
+    <div style="flex:2;"><label class="f-label" for="fs_https_key">Key file</label>
+      <input type="text" id="fs_https_key" placeholder="leave blank to self-sign"></div>
+  </div>
+  <p class="muted" id="fs-tls-warn" style="display:none;color:var(--crit);">
+    No certificate is configured and this build can't generate one
+    (the <code>cryptography</code> package is missing) — point the two boxes
+    above at an existing certificate and key, or HTTPS won't start.</p>
+</div>
+
+<div class="card">
+  <h2>FTP</h2>
+  <p class="card-sub">For older handsets and gateways that only speak FTP.
+    Passive mode is supported, which is what most clients use by default.</p>
+  <div class="f-row">
+    <div><label class="f-label">Enabled</label>
+      <label class="switch"><input type="checkbox" id="fs_ftp_enabled"><span class="track"></span></label></div>
+    <div><label class="f-label" for="fs_ftp_port">Port</label>
+      <input type="number" id="fs_ftp_port" min="1" max="65535"></div>
+    <div><label class="f-label">Allow uploads</label>
+      <label class="switch"><input type="checkbox" id="fs_ftp_upload"><span class="track"></span></label>
+      <div class="f-help">Also permits rename, delete and folder creation.</div></div>
+    <div><label class="f-label">Allow anonymous</label>
+      <label class="switch"><input type="checkbox" id="fs_ftp_anonymous"><span class="track"></span></label>
+      <div class="f-help">Many devices log in as <code>anonymous</code>.</div></div>
+    <div><label class="f-label" for="fs_ftp_user">Username <span class="muted">(optional)</span></label>
+      <input type="text" id="fs_ftp_user" autocomplete="off"></div>
+    <div><label class="f-label" for="fs_ftp_pass">Password</label>
+      <input type="password" id="fs_ftp_pass" autocomplete="new-password"></div>
+    <div><label class="f-label" for="fs_ftp_pasv_from">Passive port range</label>
+      <div style="display:flex;gap:6px;">
+        <input type="number" id="fs_ftp_pasv_from" min="1024" max="65535">
+        <input type="number" id="fs_ftp_pasv_to" min="1024" max="65535">
+      </div>
+      <div class="f-help">Open this range on the firewall as well as the
+        control port, or passive transfers will hang.</div></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>TFTP</h2>
+  <p class="card-sub">What most Ascom IP-DECT and older telephony kit uses for
+    firmware and config. TFTP has <b>no authentication of any kind</b> — anyone
+    who can reach the port can read the folder, and if uploads are on, write to
+    it. Only run it on a network you control.</p>
+  <div class="f-row">
+    <div><label class="f-label">Enabled</label>
+      <label class="switch"><input type="checkbox" id="fs_tftp_enabled"><span class="track"></span></label></div>
+    <div><label class="f-label" for="fs_tftp_port">Port</label>
+      <input type="number" id="fs_tftp_port" min="1" max="65535">
+      <div class="f-help">69 is the standard. Needs root/Administrator.</div></div>
+    <div><label class="f-label">Allow uploads</label>
+      <label class="switch"><input type="checkbox" id="fs_tftp_upload"><span class="track"></span></label>
+      <div class="f-help">Unauthenticated writes — leave off unless a device
+        genuinely needs to send its config back.</div></div>
+  </div>
+  <div style="margin-top:14px;">
+    <button class="btn primary" id="fs-save">Save server settings</button>
+    <span class="muted" id="fs-save-note" style="margin-left:10px;"></span>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Files <span class="muted" id="fs-free"></span></h2>
+  <p class="card-sub">The folder every protocol serves.
+    <span class="mono" id="fs-crumb"></span></p>
+  {% if is_admin %}
+  <div class="filter-row" style="margin-bottom:12px;gap:6px;">
+    <button class="btn small" id="fs-up">↑ Up</button>
+    <button class="btn small" id="fs-mkdir">+ New folder</button>
+    <label class="btn small" style="cursor:pointer;margin:0;">
+      ↑ Upload file<input type="file" id="fs-upload" style="display:none;" multiple>
+    </label>
+  </div>
+  {% endif %}
+  <table class="list" id="fs-files">
+    <thead><tr><th>Name</th><th class="num">Size</th><th class="num">Modified</th>
+      <th class="right">Actions</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p class="muted" id="fs-empty" style="display:none;">This folder is empty.</p>
+</div>
+
+<div class="card">
+  <h2>Recent transfers</h2>
+  <p class="card-sub">The last few hundred requests any device made, so you can
+    see whether a handset actually collected its firmware.
+    <button class="btn small" id="fs-clear-x" style="margin-left:8px;">Clear</button></p>
+  <table class="list" id="fs-xfers">
+    <thead><tr><th>Time</th><th>Protocol</th><th>From</th><th>Operation</th>
+      <th>File</th><th class="num">Bytes</th><th>Result</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p class="muted" id="fs-xfers-empty" style="display:none;">Nothing yet.</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+  const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
+  const PROTOS = ["http", "https", "ftp", "tftp"];
+  // text boxes and numbers; the switches are handled separately because a
+  // checkbox carries its value in .checked, not .value
+  const FIELDS = ["fs_root", "fs_bind", "fs_max_upload_mb",
+                  "fs_http_port", "fs_http_user", "fs_http_pass",
+                  "fs_https_port", "fs_https_cert", "fs_https_key",
+                  "fs_ftp_port", "fs_ftp_user", "fs_ftp_pass",
+                  "fs_ftp_pasv_from", "fs_ftp_pasv_to",
+                  "fs_tftp_port"];
+  const SWITCHES = ["fs_http_enabled", "fs_http_upload",
+                    "fs_https_enabled", "fs_https_upload",
+                    "fs_ftp_enabled", "fs_ftp_upload", "fs_ftp_anonymous",
+                    "fs_tftp_enabled", "fs_tftp_upload"];
+  let cwd = "";
+  let addresses = [];
+
+  function bytes(n) {
+    if (n == null) return "—";
+    const u = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0, v = n;
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    return (i ? v.toFixed(1) : v) + " " + u[i];
+  }
+
+  function when(ts) {
+    if (!ts) return "—";
+    return new Date(ts * 1000).toLocaleString();
+  }
+
+  function urlFor(proto, st) {
+    if (!st.running) return "";
+    const host = addresses[0] || location.hostname;
+    if (proto === "http") return "http://" + host + ":" + st.port + "/";
+    if (proto === "https") return "https://" + host + ":" + st.port + "/";
+    if (proto === "ftp") return "ftp://" + host + ":" + st.port + "/";
+    return host + " port " + st.port;      // tftp has no useful URL scheme
+  }
+
+  function renderStatus(status) {
+    addresses = status.addresses || [];
+    const tb = document.querySelector("#fs-status tbody");
+    tb.innerHTML = "";
+    for (const p of PROTOS) {
+      const st = status[p];
+      const tr = document.createElement("tr");
+
+      const tdP = document.createElement("td");
+      tdP.style.fontWeight = "600";
+      tdP.textContent = p.toUpperCase();
+      tr.appendChild(tdP);
+
+      const tdPort = document.createElement("td");
+      tdPort.className = "mono";
+      tdPort.textContent = st.port;
+      tr.appendChild(tdPort);
+
+      const tdUp = document.createElement("td");
+      const upPill = document.createElement("span");
+      upPill.className = "pill " + (st.upload ? "warn" : "disabled");
+      upPill.textContent = st.upload ? "▲ Allowed" : "○ Read only";
+      tdUp.appendChild(upPill);
+      tr.appendChild(tdUp);
+
+      const tdSt = document.createElement("td");
+      const pill = document.createElement("span");
+      if (!st.enabled) { pill.className = "pill disabled"; pill.textContent = "○ Off"; }
+      else if (st.running) { pill.className = "pill up"; pill.textContent = "● Running"; }
+      else { pill.className = "pill down"; pill.textContent = "✖ Failed"; }
+      tdSt.appendChild(pill);
+      if (st.error) {
+        const e = document.createElement("div");
+        e.className = "muted";
+        e.style.fontSize = "12px";
+        e.style.marginTop = "3px";
+        e.textContent = st.error;
+        tdSt.appendChild(e);
+      }
+      tr.appendChild(tdSt);
+
+      const tdA = document.createElement("td");
+      tdA.className = "mono";
+      tdA.style.fontSize = "12px";
+      tdA.textContent = urlFor(p, st) || "—";
+      tr.appendChild(tdA);
+
+      tb.appendChild(tr);
+    }
+    const note = document.getElementById("fs-addr-note");
+    note.textContent = addresses.length
+      ? "This machine's addresses: " + addresses.join(", ") +
+        " — point devices at whichever one is on their network."
+      : "";
+  }
+
+  function fillConfig(cfg) {
+    if (!IS_ADMIN) return;
+    for (const k of FIELDS) {
+      const el = document.getElementById(k);
+      if (el) el.value = cfg[k] == null ? "" : cfg[k];
+    }
+    for (const k of SWITCHES) {
+      const el = document.getElementById(k);
+      if (el) el.checked = !!cfg[k];
+    }
+    const rootBox = document.getElementById("fs_root");
+    if (rootBox) rootBox.placeholder = cfg.default_root || "";
+  }
+
+  function renderXfers(rows) {
+    const tb = document.querySelector("#fs-xfers tbody");
+    tb.innerHTML = "";
+    document.getElementById("fs-xfers-empty").style.display =
+      rows.length ? "none" : "block";
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      const cells = [when(r.ts), (r.proto || "").toUpperCase(), r.peer || "",
+                     r.op || "", r.path || "", bytes(r.bytes)];
+      cells.forEach((v, i) => {
+        const td = document.createElement("td");
+        if (i === 5) td.className = "num mono";
+        else if (i === 2 || i === 4) td.className = "mono";
+        td.style.fontSize = "12px";
+        td.textContent = v;
+        tr.appendChild(td);
+      });
+      const tdR = document.createElement("td");
+      const pill = document.createElement("span");
+      pill.className = "pill " + (r.ok ? "up" : "down");
+      pill.textContent = r.ok ? "● OK" : "✖ Failed";
+      pill.title = r.error || "";
+      tdR.appendChild(pill);
+      tr.appendChild(tdR);
+      tb.appendChild(tr);
+    }
+  }
+
+  async function refresh() {
+    let d;
+    try { d = await api("/api/fileserv/status"); }
+    catch (e) { return; }
+    renderStatus(d.status);
+    fillConfig(d.config);
+    renderXfers(d.transfers || []);
+    const w = document.getElementById("fs-tls-warn");
+    if (w) w.style.display = d.tls_ready ? "none" : "block";
+  }
+
+  async function loadFiles(path) {
+    let d;
+    try { d = await api("/api/fileserv/files?path=" + encodeURIComponent(path || "")); }
+    catch (e) { toast(e.message, true); return; }
+    cwd = (d.path === "/" ? "" : d.path.replace(/^\//, ""));
+    document.getElementById("fs-crumb").textContent = d.root + (d.path === "/" ? "" : d.path);
+    document.getElementById("fs-free").textContent = "— " + bytes(d.free) + " free";
+    const tb = document.querySelector("#fs-files tbody");
+    tb.innerHTML = "";
+    document.getElementById("fs-empty").style.display = d.items.length ? "none" : "block";
+    for (const it of d.items) {
+      const rel = (cwd ? cwd + "/" : "") + it.name;
+      const tr = document.createElement("tr");
+
+      const tdN = document.createElement("td");
+      if (it.dir) {
+        const a = document.createElement("a");
+        a.href = "#";
+        a.textContent = "📁 " + it.name;
+        a.addEventListener("click", (ev) => { ev.preventDefault(); loadFiles(rel); });
+        tdN.appendChild(a);
+      } else {
+        tdN.textContent = it.name;
+      }
+      tr.appendChild(tdN);
+
+      const tdS = document.createElement("td");
+      tdS.className = "num mono";
+      tdS.textContent = it.dir ? "—" : bytes(it.size);
+      tr.appendChild(tdS);
+
+      const tdM = document.createElement("td");
+      tdM.className = "num mono";
+      tdM.style.fontSize = "12px";
+      tdM.textContent = when(it.mtime);
+      tr.appendChild(tdM);
+
+      const tdA = document.createElement("td");
+      tdA.className = "right";
+      if (!it.dir) {
+        const dl = document.createElement("a");
+        dl.className = "btn small";
+        dl.textContent = "Download";
+        dl.href = "/api/fileserv/download?path=" + encodeURIComponent(rel);
+        tdA.appendChild(dl);
+      }
+      if (IS_ADMIN) {
+        const del = document.createElement("button");
+        del.className = "btn small danger";
+        del.style.marginLeft = "6px";
+        del.textContent = "Delete";
+        del.addEventListener("click", async () => {
+          if (!confirm('Delete "' + it.name + '"' +
+                       (it.dir ? " and everything in it" : "") + "?")) return;
+          try {
+            await api("/api/fileserv/delete",
+                      { method: "POST", body: JSON.stringify({ path: rel }) });
+            loadFiles(cwd);
+          } catch (e) { toast(e.message, true); }
+        });
+        tdA.appendChild(del);
+      }
+      tr.appendChild(tdA);
+      tb.appendChild(tr);
+    }
+  }
+
+  if (IS_ADMIN) {
+    document.getElementById("fs-save").addEventListener("click", async () => {
+      const body = {};
+      for (const k of FIELDS) {
+        const el = document.getElementById(k);
+        if (el) body[k] = el.value.trim();
+      }
+      for (const k of SWITCHES) {
+        const el = document.getElementById(k);
+        if (el) body[k] = el.checked;
+      }
+      const note = document.getElementById("fs-save-note");
+      note.textContent = "Saving…";
+      try {
+        const d = await api("/api/fileserv/config",
+                            { method: "POST", body: JSON.stringify(body) });
+        renderStatus(d.status);
+        fillConfig(d.config);
+        const bad = PROTOS.filter(p => d.status[p].enabled && !d.status[p].running);
+        note.textContent = "";
+        if (bad.length) toast(bad.join(", ").toUpperCase() + " did not start — see the table", true);
+        else toast("Saved");
+        loadFiles(cwd);
+      } catch (e) { note.textContent = ""; toast(e.message, true); }
+    });
+
+    document.getElementById("fs-up").addEventListener("click", () => {
+      if (!cwd) return;
+      loadFiles(cwd.split("/").slice(0, -1).join("/"));
+    });
+
+    document.getElementById("fs-mkdir").addEventListener("click", async () => {
+      const name = prompt("New folder name");
+      if (!name) return;
+      try {
+        await api("/api/fileserv/mkdir",
+                  { method: "POST", body: JSON.stringify({ path: cwd, name: name }) });
+        loadFiles(cwd);
+      } catch (e) { toast(e.message, true); }
+    });
+
+    document.getElementById("fs-upload").addEventListener("change", async (ev) => {
+      const files = Array.from(ev.target.files || []);
+      ev.target.value = "";
+      for (const f of files) {
+        const fd = new FormData();
+        fd.append("file", f);
+        fd.append("path", cwd);
+        try {
+          const r = await fetch("/api/fileserv/upload", { method: "POST", body: fd });
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.error || "upload failed");
+        } catch (e) { toast(f.name + ": " + e.message, true); }
+      }
+      toast(files.length + " file(s) uploaded");
+      loadFiles(cwd);
+    });
+  }
+
+  document.getElementById("fs-clear-x").addEventListener("click", async () => {
+    try { await api("/api/fileserv/transfers/clear", { method: "POST" }); refresh(); }
+    catch (e) { toast(e.message, true); }
+  });
+
+  refresh();
+  loadFiles("");
+  setInterval(refresh, 10000);
+})();
+</script>
+{% endblock %}

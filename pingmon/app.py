@@ -13,7 +13,8 @@ import time
 from flask import (Flask, jsonify, redirect, render_template, request,
                    send_file, send_from_directory, session, url_for)
 
-from . import capture, database, floorplans, netcheck, netdiag, oui, settings
+from . import (capture, database, fileserv, floorplans, netcheck, netdiag, oui,
+               settings)
 from .emailer import Emailer, REPORT_KINDS
 from .monitor import Monitor
 from .webhooks import Webhooks
@@ -141,6 +142,10 @@ def create_app():
     agent.start()
     feed.start()
     imt.start()
+    try:
+        fileserv.apply()          # start whichever file servers are switched on
+    except Exception as e:        # a port we can't bind must not stop the GUI
+        log.warning("file servers did not start: %s", e)
     register_routes(app)
     return app
 
@@ -644,6 +649,108 @@ def register_routes(app):
     def tools_page():
         return render_template("tools.html", page="tools",
                                theme=settings.get("default_theme"))
+
+    @app.route("/tools/fileserver")
+    @login_required
+    def fileserver_page():
+        return render_template("fileserver.html", page="fileserver",
+                               theme=settings.get("default_theme"))
+
+    # ---------------- API: file servers ----------------
+    # Everything a device can reach over HTTP/FTP/TFTP is also reachable to the
+    # signed-in operator here, so the browse/upload/delete endpoints are
+    # admin-only: handing out firmware is one thing, replacing it is another.
+
+    _FS_MASK = "********"
+    _FS_SECRETS = ("fs_http_pass", "fs_ftp_pass")
+
+    def _fs_config():
+        cfg = {k: settings.get(k) for k in settings.DEFAULTS
+               if k.startswith("fs_")}
+        for k in _FS_SECRETS:
+            cfg[k] = _FS_MASK if cfg.get(k) else ""
+        cfg["default_root"] = fileserv.DEFAULT_ROOT
+        return cfg
+
+    @app.route("/api/fileserv/status")
+    @login_required
+    def api_fs_status():
+        return jsonify(status=fileserv.status(), config=_fs_config(),
+                       transfers=fileserv.transfers(100),
+                       tls_ready=fileserv.tls_available())
+
+    @app.route("/api/fileserv/config", methods=["POST"])
+    @admin_required
+    def api_fs_config():
+        data = request.get_json(force=True) or {}
+        payload = {k: v for k, v in data.items()
+                   if k in settings.DEFAULTS and k.startswith("fs_")}
+        # an untouched password box comes back as the mask — leave it alone
+        for k in _FS_SECRETS:
+            if payload.get(k) == _FS_MASK:
+                payload.pop(k)
+        settings.update(payload)
+        try:
+            fileserv.apply()
+        except Exception as e:            # a bad port shouldn't lose the save
+            log.warning("file server apply failed: %s", e)
+        return jsonify(ok=True, status=fileserv.status(), config=_fs_config())
+
+    @app.route("/api/fileserv/files")
+    @login_required
+    def api_fs_files():
+        try:
+            return jsonify(fileserv.list_dir(request.args.get("path", "")))
+        except (FileNotFoundError, ValueError) as e:
+            return jsonify(error=str(e)), 400
+
+    @app.route("/api/fileserv/upload", methods=["POST"])
+    @admin_required
+    def api_fs_upload():
+        f = request.files.get("file")
+        if not f or not f.filename:
+            return jsonify(error="no file"), 400
+        try:
+            name = fileserv.save_upload(request.form.get("path", ""),
+                                        f.filename, f)
+        except (ValueError, OSError) as e:
+            return jsonify(error=str(e)), 400
+        return jsonify(ok=True, file=name)
+
+    @app.route("/api/fileserv/download")
+    @login_required
+    def api_fs_download():
+        try:
+            folder, name = fileserv.resolve_for_download(
+                request.args.get("path", ""))
+        except (FileNotFoundError, ValueError) as e:
+            return jsonify(error=str(e)), 404
+        return send_from_directory(folder, name, as_attachment=True)
+
+    @app.route("/api/fileserv/delete", methods=["POST"])
+    @admin_required
+    def api_fs_delete():
+        try:
+            fileserv.delete((request.get_json(force=True) or {}).get("path", ""))
+        except (FileNotFoundError, ValueError, OSError) as e:
+            return jsonify(error=str(e)), 400
+        return jsonify(ok=True)
+
+    @app.route("/api/fileserv/mkdir", methods=["POST"])
+    @admin_required
+    def api_fs_mkdir():
+        data = request.get_json(force=True) or {}
+        try:
+            fileserv.make_dir(data.get("path", ""), data.get("name", ""))
+        except (ValueError, OSError) as e:
+            return jsonify(error=str(e)), 400
+        return jsonify(ok=True)
+
+    @app.route("/api/fileserv/transfers/clear", methods=["POST"])
+    @login_required
+    def api_fs_clear_transfers():
+        fileserv.clear_transfers()
+        return jsonify(ok=True)
 
     # ---------------- API: on-demand network tools ----------------
 

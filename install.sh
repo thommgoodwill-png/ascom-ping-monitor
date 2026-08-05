@@ -95,4 +95,10 @@ echo
 echo "  Service:   systemctl status ${SERVICE}"
 echo "  Logs:      journalctl -u ${SERVICE} -f"
 echo "  Data:      ${DATA_DIR}"
+echo
+echo "  File servers (Tools -> File servers) are OFF by default. Switch on"
+echo "  only what the site needs, and open the firewall to match:"
+echo "    HTTP 8081/tcp   HTTPS 8443/tcp   FTP 21/tcp (+ 50000-50100 passive)"
+echo "    TFTP 69/udp     - files are served from ${DATA_DIR}/fileserver"
+echo "  The service runs as root, so ports 21 and 69 bind without extra setup."
 echo "=============================================================="

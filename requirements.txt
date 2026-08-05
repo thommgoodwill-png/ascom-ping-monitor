@@ -5,6 +5,11 @@ qrcode>=7.0
 # public cert even when the OS root store is missing or outdated (Windows Server).
 certifi>=2023.7
 
+# Generates the self-signed certificate the HTTPS file server uses when no
+# certificate is configured (Tools -> File servers). Everything else in the app
+# works without it; HTTPS just won't start until a cert/key pair is supplied.
+cryptography>=41.0
+
 # Telligence config DB (device type/serial) lookup over SQL Server.
 # python-tds is pure Python (works everywhere, SQL auth). For Windows/trusted
 # auth install pyodbc too (needs an ODBC Driver for SQL Server, which a SQL

@@ -132,6 +132,42 @@ DEFAULTS = {
     "capture_max_seconds": 60,      # UI upper bound for a single capture
     "capture_max_packets": 5000,    # UI upper bound for a single capture
 
+    # -------- file servers (Tools -> File servers) --------
+    # One shared folder served over any combination of HTTP, HTTPS, FTP and
+    # TFTP, so handsets, IP-DECT bases and gateways can pull firmware and
+    # config on site without standing up a separate server. Everything here is
+    # off by default, and uploads are a separate opt-in per protocol: serving
+    # files read-only is a very different risk from letting anything on the
+    # network write into the folder.
+    "fs_root": "",                  # blank = <data dir>/fileserver
+    "fs_bind": "0.0.0.0",           # listen address (0.0.0.0 = every interface)
+    "fs_max_upload_mb": 512,        # per-file cap on anything written to us
+
+    "fs_http_enabled": False,
+    "fs_http_port": 8081,           # not 80 — the GUI already owns 8080
+    "fs_http_upload": False,        # allow PUT/POST writes
+    "fs_http_user": "",             # blank user = no authentication at all
+    "fs_http_pass": "",             # (masked in the API)
+
+    "fs_https_enabled": False,
+    "fs_https_port": 8443,
+    "fs_https_upload": False,
+    "fs_https_cert": "",            # blank = auto-generate a self-signed pair
+    "fs_https_key": "",             # shares fs_http_user / fs_http_pass
+
+    "fs_ftp_enabled": False,
+    "fs_ftp_port": 21,
+    "fs_ftp_upload": False,         # allow STOR/APPE/DELE/MKD/RMD/RNTO
+    "fs_ftp_user": "",
+    "fs_ftp_pass": "",              # (masked in the API)
+    "fs_ftp_anonymous": True,       # accept anonymous / ftp logins
+    "fs_ftp_pasv_from": 50000,      # passive data-port range, for firewalls
+    "fs_ftp_pasv_to": 50100,
+
+    "fs_tftp_enabled": False,
+    "fs_tftp_port": 69,
+    "fs_tftp_upload": False,        # allow WRQ (TFTP has no authentication)
+
     # -------- access control (admin) --------
     "allowed_emails": "",           # comma/newline list of allowed email patterns
                                     # (wildcards, e.g. *@ascom.com). Blank = allow all.
@@ -168,6 +204,13 @@ CLAMPS = {
     "tel_db_port": (1, 65535),
     "feed_port": (0, 65535),
     "feed_heartbeat_secs": (0, 3600),
+    "fs_max_upload_mb": (1, 10240),
+    "fs_http_port": (1, 65535),
+    "fs_https_port": (1, 65535),
+    "fs_ftp_port": (1, 65535),
+    "fs_tftp_port": (1, 65535),
+    "fs_ftp_pasv_from": (1024, 65535),
+    "fs_ftp_pasv_to": (1024, 65535),
 }
 
 _HHMM = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d$")
@@ -236,6 +279,9 @@ def update(payload):
     # keep thresholds ordered
     if get("crit_ms") <= get("warn_ms"):
         applied["crit_ms"] = set("crit_ms", get("warn_ms") + 1)
+    # a passive range that runs backwards would leave FTP with no data port
+    if get("fs_ftp_pasv_to") < get("fs_ftp_pasv_from"):
+        applied["fs_ftp_pasv_to"] = set("fs_ftp_pasv_to", get("fs_ftp_pasv_from"))
     return applied
 
 

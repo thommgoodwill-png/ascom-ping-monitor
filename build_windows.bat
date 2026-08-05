@@ -33,7 +33,7 @@ REM pip.exe cannot overwrite itself while it is running, so Windows pip refuses 
 REM self-upgrade when called as "pip". Going through the interpreter (-m pip) works.
 REM Non-fatal either way: whatever pip the venv ships with installs the rest fine.
 "%VPY%" -m pip install --quiet --upgrade pip >nul 2>nul
-"%VPY%" -m pip install --quiet flask waitress pystray pillow pyinstaller python-tds certifi || (echo pip install failed & pause & exit /b 1)
+"%VPY%" -m pip install --quiet flask waitress pystray pillow pyinstaller python-tds certifi cryptography || (echo pip install failed & pause & exit /b 1)
 
 echo === Installing pyodbc (for Windows-auth SQL Server; optional)...
 "%VPY%" -m pip install --quiet pyodbc || echo    (pyodbc unavailable - SQL-login auth will still work via python-tds)
@@ -52,6 +52,8 @@ build-venv\Scripts\pyinstaller.exe --noconfirm --clean --onefile --noconsole ^
     --collect-submodules pytds ^
     --hidden-import certifi ^
     --collect-data certifi ^
+    --hidden-import cryptography ^
+    --collect-submodules cryptography ^
     run.py
 if errorlevel 1 (echo BUILD FAILED & pause & exit /b 1)
 

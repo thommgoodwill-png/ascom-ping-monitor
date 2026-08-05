@@ -41,6 +41,16 @@ emails reports and failure alerts through Gmail.
   acknowledge).
 - **Path analysis (MTR-style)** — repeated hop-by-hop probing showing which hop
   loses packets or adds latency.
+- **Built-in file servers (Tools → File servers)** — one shared folder served
+  over any combination of **HTTP, HTTPS, FTP and TFTP**, so handsets, IP-DECT
+  bases and gateways can pull firmware and configuration on site without
+  standing up a separate server. Every server is **off by default**, and letting
+  devices *write* files back is a separate opt-in per protocol. Default ports are
+  **8081 (HTTP), 8443 (HTTPS), 21 (FTP), 69 (TFTP)** — all changeable. FTP 21 and
+  TFTP 69 need the service to run as root/Administrator; if a port can't be
+  bound, the page says why. Nothing outside the shared folder is reachable over
+  any protocol. Browse, upload and delete from the page itself (admins only);
+  a **Recent transfers** log shows whether a device actually collected its file.
 - **SNMP query** — read standard system OIDs from managed switches/APs/UPS.
 - **Throughput test (iperf3)** — real bandwidth to a host running `iperf3 -s`.
 - Configurable **ping payload size** (large packets expose MTU/fragmentation faults).
@@ -211,6 +221,39 @@ Gmail no longer allows plain passwords over SMTP, so you need an **app password*
 
 Each device also has its own **enable/disable** toggle and optional
 **per-device ping interval** override on the Devices page.
+
+## File servers (Tools → File servers)
+
+Everything here is configured on its own page rather than in Settings, because
+it is per-machine: each install serves its own folder, whether it is the hub or
+a site agent.
+
+| Protocol | Default port | Authentication | Notes |
+|---|---|---|---|
+| HTTP | 8081 | optional username/password | Not 8080 — the GUI owns that |
+| HTTPS | 8443 | shares the HTTP credentials | Self-signs a certificate if none is given |
+| FTP | 21 | optional user, plus an anonymous toggle | Passive range 50000–50100 by default |
+| TFTP | 69 | **none — the protocol has no concept of it** | What most Ascom IP-DECT kit uses |
+
+All four are **off by default**, and uploads are a **separate switch per
+protocol** — serving firmware read-only is a very different risk from letting
+anything on the network write into the folder. Uploads are capped (512 MB per
+file by default) and a failed or refused upload never leaves a truncated file
+behind, so the next device along can't collect a half-written firmware image.
+
+Practical notes for a site install:
+
+- **Ports below 1024** (FTP 21, TFTP 69) need the service to run as root on
+  Linux or Administrator on Windows. The systemd unit this installer writes runs
+  as root, so they work; if a port can't be bound the Servers table says so in
+  plain English rather than failing silently.
+- **Open the firewall** for whichever protocols you switch on. For FTP that
+  means the control port *and* the passive range, or transfers will connect and
+  then hang.
+- **Listen on** defaults to `0.0.0.0` (every interface). Set it to one address
+  if the machine is on more than one network and you only want to serve one.
+- Nothing outside the shared folder is reachable over any protocol — paths are
+  resolved and checked against the folder root before anything is opened.
 
 ## The dashboard
 

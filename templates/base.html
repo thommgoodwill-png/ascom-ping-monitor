@@ -1,6 +1,7 @@
 <!DOCTYPE html>
-{% set net_pages = ['devices','events','heatmap','sla','tools','capture','network_settings'] %}
+{% set net_pages = ['devices','events','heatmap','sla','capture','network_settings'] %}
 {% set tel_pages = ['telligence','telligence_settings'] %}
+{% set tool_pages = ['tools','fileserver'] %}
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -27,6 +28,7 @@
     <a href="/customers" class="{{ 'active' if page == 'customers' }}">Customers</a>
     <a href="/devices" class="{{ 'active' if page in net_pages }}">Network Monitoring</a>
     <a href="/telligence" class="{{ 'active' if page in tel_pages }}">Telligence Monitoring</a>
+    <a href="/tools" class="{{ 'active' if page in tool_pages }}">Tools</a>
     <a href="/settings" class="{{ 'active' if page == 'settings' }}">Settings</a>
     {% if is_admin %}<a href="/users" class="{{ 'active' if page == 'users' }}">Users</a>{% endif %}
   </nav>
@@ -47,6 +49,7 @@
 <main class="wrap">
   {% if page in net_pages %}{% include "_net_subnav.html" %}{% endif %}
   {% if page in tel_pages %}{% include "_tel_subnav.html" %}{% endif %}
+  {% if page in tool_pages %}{% include "_tools_subnav.html" %}{% endif %}
   {% block content %}{% endblock %}
 </main>
 <footer class="app-foot"><span class="muted">Ascom Network Monitor · build v{{ asset_ver }}</span></footer>
