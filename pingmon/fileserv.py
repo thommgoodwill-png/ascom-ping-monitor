@@ -229,7 +229,31 @@ class _HttpHandler(SimpleHTTPRequestHandler):
     def _peer(self):
         return self.client_address[0]
 
-    def _authorised(self):
+    _accept_ranges = False
+
+    def end_headers(self):
+        # advertise resume support on file responses, so a client knows it may
+        # come back with a Range header after a dropped transfer
+        if self._accept_ranges:
+            self._accept_ranges = False
+            self.send_header("Accept-Ranges", "bytes")
+        super().end_headers()
+
+    def _normalise_path(self):
+        """Accept an absolute-form request line.
+
+        RFC 7230 says a server must accept `GET http://host/file HTTP/1.1` as
+        well as `GET /file`, and some provisioning clients (and anything coming
+        through a proxy) send it that way. Python's handler treats the whole URL
+        as the filename and answers 404, which looks to the engineer like a
+        missing file rather than a request it simply didn't parse."""
+        p = self.path
+        if p.startswith("http://") or p.startswith("https://"):
+            rest = p.split("//", 1)[1]
+            slash = rest.find("/")
+            self.path = rest[slash:] if slash >= 0 else "/"
+
+    def _authorised(self, op="GET"):
         user = (self.fs_cfg.get("user") or "").strip()
         pwd = self.fs_cfg.get("password") or ""
         if not user:
@@ -245,6 +269,17 @@ class _HttpHandler(SimpleHTTPRequestHandler):
             # time as a wrong password
             if hmac.compare_digest(u, user) and hmac.compare_digest(p, pwd):
                 return True
+        # Say in the transfer log which of the two it was. A client that never
+        # sends credentials is a device configured without them; a client that
+        # sends the wrong ones is a typo. Both look identical from the device
+        # end ("HTTP error"), and only this log can tell them apart.
+        if got:
+            why = ("wrong username or password" if got.startswith("Basic ")
+                   else "unsupported authentication (this server accepts Basic)")
+        else:
+            why = "no credentials supplied"
+        record(self.fs_cfg.get("proto", "http"), self._peer(), op,
+               self.path, 0, False, why)
         self.send_response(401)
         self.send_header("WWW-Authenticate", 'Basic realm="Ascom file server"')
         self.send_header("Content-Length", "0")
@@ -277,19 +312,114 @@ class _HttpHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     # -- download ----------------------------------------------------------
-    def do_GET(self):
-        if not self._authorised():
+    # Requests a browser makes on its own that would otherwise fill the log
+    # with misses nobody caused.
+    _NOISE = ("/favicon.ico", "/robots.txt", "/apple-touch-icon.png")
+
+    def _parse_range(self, size):
+        """Interpret a Range header.
+
+        Returns (start, end) inclusive, None to mean "serve the whole file", or
+        False if the range can't be satisfied. Only a single range is handled —
+        multipart ranges are a browser nicety no firmware client sends, and
+        answering them wrongly is worse than answering 200.
+        """
+        spec = (self.headers.get("Range") or "").strip()
+        if not spec.lower().startswith("bytes="):
+            return None
+        spec = spec[6:].strip()
+        if "," in spec:
+            return None
+        first, _, last = spec.partition("-")
+        try:
+            if not first:                      # bytes=-500 → the last 500 bytes
+                n = int(last)
+                if n <= 0:
+                    return False
+                start, end = max(0, size - n), size - 1
+            else:
+                start = int(first)
+                end = int(last) if last else size - 1
+        except ValueError:
+            return None
+        if start >= size or start > end:
+            return False
+        return start, min(end, size - 1)
+
+    def _serve_partial(self, op, path):
+        """Answer a Range request properly, or say we can't.
+
+        This matters most for firmware. A wireless handset pulling a multi-megabyte
+        image will drop the connection and ask to resume from where it stopped;
+        answering 200 with the file from byte zero — which is what the stock
+        library handler does — hands it the beginning of the image while it
+        believes it is receiving the end, and it writes a corrupt flash without
+        anything reporting an error.
+        """
+        proto = self.fs_cfg.get("proto", "http")
+        size = os.path.getsize(path)
+        rng = self._parse_range(size)
+        if rng is None:
+            return False                       # caller serves it normally
+        if rng is False:
+            self.send_response(416)
+            self.send_header("Content-Range", "bytes */%d" % size)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            record(proto, self._peer(), op, _rel(path), 0, False,
+                   "requested byte range is outside the file")
+            return True
+        start, end = rng
+        length = end - start + 1
+        self.send_response(206)
+        self.send_header("Content-Type", self.guess_type(path))
+        self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
+        self.send_header("Content-Length", str(length))
+        # Accept-Ranges is added by end_headers()
+        self.send_header("Last-Modified",
+                         self.date_time_string(os.stat(path).st_mtime))
+        self.end_headers()
+        sent = 0
+        if op == "GET":
+            with open(path, "rb") as f:
+                f.seek(start)
+                while sent < length:
+                    chunk = f.read(min(65536, length - sent))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    sent += len(chunk)
+        record(proto, self._peer(), op + " (part)", _rel(path), sent)
+        return True
+
+    def _serve(self, op, fn):
+        self._normalise_path()
+        if not self._authorised(op):
             return
         path = self.translate_path(self.path)
-        super().do_GET()
+        proto = self.fs_cfg.get("proto", "http")
         if os.path.isfile(path):
-            record(self.fs_cfg.get("proto", "http"), self._peer(), "GET",
-                   _rel(path), os.path.getsize(path))
+            # tell every client that resume is available, whether or not this
+            # particular request asked for it
+            self._accept_ranges = True
+            if self.headers.get("Range") and self._serve_partial(op, path):
+                return
+        fn()
+        if os.path.isfile(path):
+            record(proto, self._peer(), op, _rel(path), os.path.getsize(path))
+        elif os.path.isdir(path):
+            pass                              # directory listing: not a transfer
+        elif self.path.split("?", 1)[0].lower() not in self._NOISE:
+            # The single most useful line in the log: the device did reach us,
+            # it just asked for something that isn't in the folder. Record the
+            # name it asked for, exactly as it asked.
+            record(proto, self._peer(), op, self.path, 0, False, "file not found")
+
+    def do_GET(self):
+        self._serve("GET", super().do_GET)
 
     def do_HEAD(self):
-        if not self._authorised():
-            return
-        super().do_HEAD()
+        self._serve("HEAD", super().do_HEAD)
 
     # -- upload ------------------------------------------------------------
     def do_PUT(self):
@@ -300,7 +430,8 @@ class _HttpHandler(SimpleHTTPRequestHandler):
 
     def _upload(self, verb):
         proto = self.fs_cfg.get("proto", "http")
-        if not self._authorised():
+        self._normalise_path()
+        if not self._authorised(verb):
             return
         if not self.fs_cfg.get("upload"):
             try:

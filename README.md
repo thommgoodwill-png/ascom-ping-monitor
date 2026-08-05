@@ -254,6 +254,14 @@ Practical notes for a site install:
   if the machine is on more than one network and you only want to serve one.
 - Nothing outside the shared folder is reachable over any protocol — paths are
   resolved and checked against the folder root before anything is opened.
+- **Firmware downloads can resume.** HTTP and HTTPS honour `Range` requests, so
+  a wireless handset that loses the connection half way through a multi-megabyte
+  image asks for the rest and gets the rest, rather than being handed the file
+  from the beginning again and flashing a corrupt image.
+- **Recent transfers records failures too**, with the exact path the device
+  asked for — a wrong filename, wrong case, wrong password or a range past the
+  end of the file each say so. That turns "the handset won't upgrade" into
+  either "it never contacted us" or "it asked for a name that isn't there".
 
 ## The dashboard
 

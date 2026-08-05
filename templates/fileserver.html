@@ -322,6 +322,14 @@
       pill.textContent = r.ok ? "● OK" : "✖ Failed";
       pill.title = r.error || "";
       tdR.appendChild(pill);
+      // Spell the reason out in the row. Hiding "file not found" in a tooltip
+      // means the engineer standing at the device never sees it.
+      if (!r.ok && r.error) {
+        const why = document.createElement("span");
+        why.textContent = " " + r.error;
+        why.style.cssText = "font-size:12px;opacity:.75";
+        tdR.appendChild(why);
+      }
       tr.appendChild(tdR);
       tb.appendChild(tr);
     }

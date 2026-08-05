@@ -179,6 +179,26 @@ def admin_required(f):
 def register_routes(app):
 
     @app.before_request
+    def _heal_session():
+        """Top up a session cookie minted by an older build.
+
+        Early versions stored only `authed` and `uid` at login; `username` and
+        `role` came later. The signing key lives in the data folder and survives
+        upgrades, so those old cookies stay valid after an update — and with no
+        role in the session the GUI treats a perfectly good administrator as a
+        standard user: no Users tab, no file-server configuration cards, 403 on
+        the admin APIs. Refill the missing halves from the database once, rather
+        than making people work out that they need to sign out and back in."""
+        if not session.get("authed") or session.get("role"):
+            return
+        u = database.get_user(session.get("uid"))
+        if not u:
+            session.clear()          # account since deleted — start again
+            return
+        session["username"] = u["username"]
+        session["role"] = u["role"]
+
+    @app.before_request
     def _enforce_2fa():
         """If the admin has required 2FA, push logged-in users who haven't set
         it up to the account page until they do."""
